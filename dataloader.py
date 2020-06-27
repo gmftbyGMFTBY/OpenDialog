@@ -1,0 +1,1322 @@
+from header import *
+from utils import *
+from data import *
+
+'''
+The Dataset Object can handle the single-turn and multi-turn (<eou> seperator) dialog format.
+'''
+
+class vocabulary:
+    
+    '''
+    Only for RNN based model
+    '''
+
+    def __init__(self, corpus, n_vocab=50000, min_freq=1, lang='zh'):
+        if n_vocab == -1:
+            n_vocab = None
+        self.allowPOS = ['n', 'nr', 'nz', 'PER', 'LOC', 'ORG', 'ns', 'nt', 'nw', 'vn', 's']
+        self.topk = 10
+        # <res> is the first token for response
+        # <ctx> is the firat token for context
+        # <eou> is the spearator between two utterances
+        reversed_tokens = ['<pad>', '<unk>', '<sos>', '<eos>']
+        self.lang = lang
+        self.vocab = vocab.Vocab(self._build_keywords(corpus), max_size=n_vocab,
+                min_freq=min_freq, specials=reversed_tokens)
+        # make sure the <pad> token id is 0
+        assert self.vocab.stoi['<pad>'] == 0, f'<pad> id should be 0, but got {self.vocab.stoi["<pad>"]}'
+        print(f'[!] init the vocabulary over, vocab size: {len(self.vocab)}')
+
+    def __len__(self):
+        return len(self.vocab)
+
+    @property
+    def size(self):
+        return len(self.vocab)
+
+    def idx2str(self, idx_seq, spliter=''):
+        # chinese spliter: ''; english spliter: ' '
+        words = self.idx2toks(idx_seq)
+        return spliter.join(words)
+
+    def toks2idx(self, tok_seq, len_size_limit):
+        first_token = self.vocab.stoi['<sos>']
+        sentence = list(map(lambda i: self.vocab.stoi[i] if i in self.vocab.stoi else self.vocab.stoi['<unk>'], tok_seq))[-(len_size_limit-2):]
+        idxs = [first_token] + sentence + [self.vocab.stoi['<eos>']]
+        return idxs
+
+    def idx2toks(self, idx_seq):
+        toks = ['<sos>'] + list(map(lambda i: self.vocab.itos[i], idx_seq)) + ['<eos>']
+        return toks
+
+    def _build_vocab(self, corpus):
+        vocab_counter = Counter()
+        for words in corpus[0]:
+            vocab_counter.update(words)
+        for words in corpus[1]:
+            vocab_counter.update(words)
+        print(f'[!] whole vocab size: {len(vocab_counter)}')
+        return vocab_counter
+
+    def _build_keywords(self, corpus):
+        keywords = Counter()
+        for dialog in tqdm(corpus):
+            for utterance in dialog:
+                words = jieba.analyse.extract_tags(
+                        utterance, 
+                        topK=self.topk, 
+                        allowPOS=self.allowPOS)
+                keywords.update(words)
+        print(f'[!] collect {len(keywords)} keywords')
+        return keywords
+
+class When2talkDataset(Dataset):
+
+    def __init__(self, path, mode='train', min_length=15, lang='zh', src_len_size=512, tgt_len_size=128):
+        if lang == 'zh':
+            vocab_file = 'data/vocab/vocab_small'
+        else:
+            vocab_file = 'data/vocab/vocab_english'
+        self.mode = mode
+        # tokenizer with addtional tokens
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        additional_tokens = {'additional_special_tokens': ['[USER1]', '[USER2]', '[STP]']}
+        self.vocab.add_special_tokens(additional_tokens)
+        self.src_len_size, self.tgt_len_size = src_len_size, tgt_len_size
+        #
+        self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        # 
+        data = read_text_data(path)
+        self.data = []
+        if self.mode in ['train', 'dev']:
+            contexts = [when2talk_utils(i) for i in data]
+            for sample in tqdm(contexts):
+                bundle = dict()
+                bundle['context_text'] = sample
+                ids = self.vocab.encode(sample)[1:-1]
+                if len(ids) < min_length:
+                    continue
+                ids = ids[-self.src_len_size:]
+                bundle['context_id'] = torch.LongTensor(ids)
+                self.data.append(bundle)
+            self.data = sorted(self.data, key=lambda x: len(x['context_id']))
+        else:
+            contexts = [when2talk_utils(i) for i in data]
+            for sample in tqdm(contexts):
+                bundle = dict()
+                bundle['context_text'] = sample
+                ids = self.vocab.encode(sample)[1:-1]
+                user2_token = self.vocab.convert_tokens_to_ids('[USER2]')
+                context, response = ids[:ids.index(user2_token) + 1], ids[ids.index(user2_token) + 1:]
+                if len(context) < min_length:
+                    continue
+                context = context[-self.src_len_size:]
+                bundle['context_id'] = torch.LongTensor(context)
+                bundle['reply_id'] = torch.LongTensor(response)
+                self.data.append(bundle)
+        print(f'[!] read and process raw data from {path} over')
+        # save the data
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+class GPT2Dataset(Dataset):
+    
+    '''
+    Training GPT2 model doesn't need the target sentence, just training the Lnaguage Model
+    GPT2 model can leverage the ability for all the pure text information, which is better than Seq2Seq architecture
+
+    Train mode: only a long pure text
+    Test/Dev mode: The long context and ground-truth
+
+    :reversed parameter: for the reversed gpt2 language model (DialoGPT MMI Model)
+    :ensemble parameter: for the gpt2retrieval model (need the TestAgent)
+        ensemble mode maybe vyer time-consuming because of the Elasticsearch is used
+    :candidates_k: candides_k will be used when ensemble model is on
+    '''
+
+    def __init__(self, path, mode='train', lang='zh',
+                 min_length=20, src_len_size=512, tgt_len_size=128,
+                 reversed=False, ensemble=False, candidates_k=2):
+        if lang == 'zh':
+            vocab_file = 'data/vocab/vocab_small'
+        else:
+            vocab_file = 'data/vocab/vocab_english'
+        self.mode = mode
+        self.pad = '[PAD]'
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.pad_id = self.vocab.convert_tokens_to_ids(self.pad)
+        self.src_len_size, self.tgt_len_size = src_len_size, tgt_len_size
+        # load and process the data
+        # CHECK WHETHER EXIST THE PREPROCESSED FILE
+        assert not (reversed and ensemble), f'[!] reversed and ensemble model cannot be used both time'
+        if reversed:
+            self.pp_path = f'{os.path.splitext(path)[0]}_mmi.pkl'
+        elif ensemble:
+            self.pp_path = f'{os.path.splitext(path)[0]}_es.pkl'
+        else:
+            self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
+
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            # Dataset object must return None
+            return None 
+
+        # PREPROCESSED
+        if reversed:
+            data = read_text_data_reversed(path)
+        elif ensemble:
+            # load the chinese word2vector embedding
+            w2v = load_w2v('data/chinese_w2v')
+            from models import TestAgent
+            data = read_text_data(path)
+            # search all the candidates of the samples in the dataset
+            # default batch size is 1024 
+            irmodel = TestAgent()
+            batch_size, data_candidates, index = 256, [], 0
+            with tqdm(total=len(data)) as pbar:
+                while index < len(data):
+                    batch = data[index:index+batch_size]
+                    # query = [i[0] for i in batch]
+                    # be careful, the very long context will raise the retrieval error for elasticsearch
+                    query = [i[0][-300:] for i in batch]
+                    rest = irmodel.MultiSearch(query, samples=candidates_k)
+                    data_candidates.extend(rest)    # dataset_size*[k]
+                    c_batch_size = len(batch)
+                    pbar.update(c_batch_size)
+                    index += c_batch_size
+            print(f'[!] obtain all the retrieval samples')
+        else:
+            data = read_text_data(path)
+        self.data = []
+        if self.mode in ['train', 'dev']:
+            contexts = []
+            for sample in data:
+                contexts.append(' [SEP] '.join(sample))
+            if ensemble:
+                for sample, candidates in tqdm(list(zip(contexts, data_candidates))):
+                    bundle = dict()
+                    # obtain the retrieval samples
+                    bundle['retrieval_text'] = candidates 
+                    embeddings = convert_text_embedding(w2v, candidates)
+                    bundle['retrieval_embedding'] = embeddings    # k*[300]
+                    # 
+                    bundle['context_text'] = sample
+                    ids = self.vocab.encode(sample)
+                    if len(ids) < min_length:
+                        continue
+                    # length size of the context
+                    ids = ids[-self.src_len_size:]
+                    bundle['context_id'] = torch.LongTensor(ids)
+                    self.data.append(bundle)
+            # NOTE: sort the self.data based on the length for miniminzing the padding tokens
+            else:
+                for sample in tqdm(contexts):
+                    bundle = dict()
+                    bundle['context_text'] = sample
+                    ids = self.vocab.encode(sample)
+                    if len(ids) < min_length:
+                        continue
+                    # length size of the context
+                    ids = ids[-self.src_len_size:]
+                    bundle['context_id'] = torch.LongTensor(ids)
+                    self.data.append(bundle)
+            # NOTE: sort the self.data based on the length for miniminzing the padding tokens
+            self.data = sorted(self.data, key=lambda x: len(x['context_id']))
+        else:
+            contexts, responses = [], []
+            for sample in data:
+                contexts.append(' [SEP] '.join(sample[:-1]))
+                responses.append(sample[-1])
+            if ensemble:
+                for c, r, candidates in tqdm(list(zip(contexts, responses, data_candidates))):
+                    bundle = dict()
+                    bundle['retrieval_text'] = candidates 
+                    rest = []
+                    for candidate in candidates:
+                        batch = torch.LongTensor(
+                                    self.vocab.encode(candidate)[-self.src_len_size:]
+                                )
+                        rest.append(batch)
+                    bundle['retrieval_ids'] = rest    # k*[seq]
+                    bundle['context_text'] = c
+                    bundle['reply_text'] = r
+                    ids = self.vocab.encode(c)
+                    if len(ids) < min_length:
+                        continue
+                    # length size of the context
+                    ids = ids[-self.src_len_size:]
+                    bundle['context_id'] = torch.LongTensor(ids)
+                    ids = self.vocab.encode(r)
+                    # length size of the context
+                    ids = ids[:self.tgt_len_size]
+                    bundle['reply_id'] = torch.LongTensor(ids)
+            else:
+                for c, r in tqdm(list(zip(contexts, responses))):
+                    bundle = dict()
+                    bundle['context_text'] = c
+                    bundle['reply_text'] = r
+                    ids = self.vocab.encode(c)
+                    if len(ids) < min_length:
+                        continue
+                    # length size of the context
+                    ids = ids[-self.src_len_size:]
+                    bundle['context_id'] = torch.LongTensor(ids)
+                    ids = self.vocab.encode(r)
+                    # length size of the context
+                    ids = ids[:self.tgt_len_size]
+                    bundle['reply_id'] = torch.LongTensor(ids)
+                    self.data.append(bundle)
+        print(f'[!] read and process raw data from {path} over')
+
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+class MultiGPT2Dataset(Dataset):
+
+    '''
+    GPT2 Dataset with the multiple retrieval samples
+    '''
+
+    def __init__(self, path, mode='train', vocab_file='data/vocab/vocab_small',
+                 src_len_size=512, tgt_len_size=128, retrieval_size=2):
+        self.mode = mode
+        self.pad = '[PAD]'
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.pad_id = self.vocab.convert_tokens_to_ids(self.pad)
+        self.src_len_size, self.tgt_len_size = src_len_size, tgt_len_size
+
+        self.data = []
+        data = read_csv_data(path)
+
+        if self.mode in ['train', 'dev']:
+            contexts, retrieval_list = [], []
+            for sample in data:
+                c = sample[0].split('<eou>')
+                c = [i.strip() for i in c]
+                c.append(sample[1])
+                contexts.append(c)
+                # retrieval list
+                retrieval_list.append(sample[2:2+retrieval_size])
+            for context, retrieval in tqdm(list(zip(contexts, retrieval_list))):
+                bundle = dict()
+                bundle['context_text'] = ''.join(context)
+                ids = [self.vocab.cls_token_id]
+                for utterance in context:
+                    ids.extend([self.vocab.convert_tokens_to_ids(word) for word in utterance])
+                    ids.append(self.vocab.sep_token_id)
+                # length size of the context
+                ids = ids[-self.src_len_size:]
+                bundle['context_id'] = torch.LongTensor(ids)
+                # retrieval list
+                bundle['retrieval_list_text'] = retrieval
+                retrieval_list_ = []
+                for i in retrieval:
+                    ids = [self.vocab.cls_token_id]
+                    ids.extend([self.vocab.convert_tokens_to_ids(word) for word in i])
+                    ids.append(self.vocab.sep_token_id)
+                    ids = ids[:self.src_len_size]
+                    retrieval_list_.append(torch.LongTensor(ids))
+                bundle['retrieval_list'] = retrieval_list_
+                self.data.append(bundle)
+        else:
+            contexts, responses, retrieval_list = [], [], []
+            for sample in data:
+                c = sample[0].split('<eou>')
+                c = [i.strip() for i in c]
+                contexts.append(c)
+                responses.append(sample[1])
+                # retrieval list
+                retrieval_list.append(sample[2:2+retrieval_size])
+            for c, r, r_ in tqdm(list(zip(contexts, responses, retrieval_list))):
+                bundle = dict()
+                bundle['context_text'] = ''.join(c)
+                bundle['reply_text'] = r
+                bundle['retrievl_list_text'] = r_
+                # ids
+                ids = [self.vocab.cls_token_id]
+                for utterance in c:
+                    ids.extend([self.vocab.convert_tokens_to_ids(word) for word in utterance])
+                    ids.append(self.vocab.sep_token_id)
+                ids = ids[-self.src_len_size:]
+                bundle['context_id'] = torch.LongTensor(ids)
+                ids = [self.vocab.cls_token_id]
+                ids.extend([self.vocab.convert_tokens_to_ids(word) for word in r])
+                ids.append(self.vocab.sep_token_id)
+                ids = ids[:self.tgt_len_size]
+                bundle['reply_id'] = torch.LongTensor(ids)
+                # retrieval ids
+                retrieval_list_ = []
+                for i in r_:
+                    ids = [self.vocab.cls_token_id]
+                    ids.extend([self.vocab.convert_tokens_to_ids(word) for word in i])
+                    ids.append(self.vocab.sep_token_id)
+                    ids = ids[:self.src_len_size]
+                    retrieval_list_.append(torch.LongTensor(ids))
+                bundle['retrieval_list'] = retrieval_list_
+                self.data.append(bundle)
+        print(f'[!] read and process raw dara from {path} over')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+class DialogDataset(Dataset):
+
+    '''
+    Construct the dataset, use once for one epoch
+    Tokenizer is the function, default jieba.cut; You can also set is the list for no tokenization
+    '''
+
+    def __init__(self, path, mode='train', vocab=None, tokenizer=jieba.cut,
+                 n_vocab=50000, src_len_size=100, tgt_len_size=20):
+        self.mode = mode
+        self.tokenizer = tokenizer
+        self.src_len_size = src_len_size
+        self.tgt_len_size = tgt_len_size
+        # load data
+        data = read_csv_data(path)
+        responses, contexts = [], []
+        for sample in tqdm(data):
+            responses.append(list(self.tokenizer(sample[1])))
+            rc, c = [], sample[0].split('<eou>')
+            for utterance in c:
+                rc.extend(list(self.tokenizer(utterance.strip())))
+                rc.append('<eou>')
+            rc = rc[:-1]
+            contexts.append(rc)
+        print(f'[!] read raw data from {path} over')
+        # process the dataset
+        if mode == 'train':
+            self.vocab = vocabulary(
+                    (contexts, responses), 
+                    n_vocab=n_vocab)
+        else:
+            assert vocab, 'vocab not the NoneType for test/dev mode'
+            self.vocab = vocab
+        self.data = []
+        # init the data
+        for c, r in zip(contexts, responses):
+            bundle = dict()
+            bundle['context_text'] = ' '.join(c)
+            bundle['reply_text'] = ' '.join(r)
+            bundle['context_id'] = torch.LongTensor(self.vocab.toks2idx(c, self.src_len_size))
+            bundle['reply_id'] = torch.LongTensor(self.vocab.toks2idx(r, self.tgt_len_size))
+            bundle['context_l'] = bundle['context_id'].shape[0]
+            bundle['reply_l'] = bundle['reply_id'].shape[0]
+            self.data.append(bundle)
+        print(f'[!] {mode} dataset init over, size: {len(self.data)}')
+        print(f'[!] example:')
+        example = random.choice(self.data)
+        print(f'CTX: {example["context_text"]}')
+        print(f'REF: {example["reply_text"]}')
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        cid, cid_l, rid, rid_l = bundle['context_id'], \
+                bundle['context_l'], bundle['reply_id'], bundle['reply_l']
+        return cid, cid_l, rid, rid_l
+
+    def __len__(self):
+        return len(self.data)
+
+class BERTNLIDataset(Dataset):
+
+    '''
+    BERT NLI Datset for Chinese
+    '''
+
+    def __init__(self, path, max_len=300, vocab_file='data/vocab/vocab_small'):
+        data = read_json_data(path)
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.max_len = max_len
+        self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            # Dataset object must return None
+            return None 
+        self.data = []
+        d_ = []
+        label_map = {'contradiction': 0, 'neutral': 1, 'entailment': 2}
+        for i in data:
+            s1, s2, label = i['sentence1'], i['sentence2'], i['gold_label']
+            d_.append((s1, s2, label))
+        for item in tqdm(d_):
+            bundle = {}
+            s1, s2, label = item
+            s = f'{s1} [SEP] {s2}'
+            sid = self.vocab.encode(s)
+            bundle['sid'] = torch.LongTensor(sid)
+            bundle['label'] = label_map[label] 
+            self.data.append(bundle)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        return bundle
+
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+class BERTLOGICDataset(Dataset):
+
+    '''
+    BERT LOGIC Dataset: similar with the BERTIRDataset
+    The negative samples are chosen by the IR systems, which have the high semantic coherence but low logic coherence.
+
+    The whole `train_retrieval` corpus is huge, only use 500000 samples
+    '''
+
+    def __init__(self, path, mode='train', max_len=300, samples=1, vocab_file='data/vocab/vocab_small'):
+        self.mode = mode
+        self.max_len = max_len
+        # data = read_csv_data(path)
+        data = read_text_data(path)
+        data = random.sample(data, 500000)
+        # context and response are all the negative samples 
+        contexts = [i[0] for i in data]
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.pp_path = f'{os.path.splitext(path)[0]}_logic.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data = []
+        self.max_len = max_len 
+        self.es = Elasticsearch() 
+        # collect the data samples
+        d_ = []
+        with tqdm(total=len(data)) as pbar:
+            idx, batch_size = 0, 1000
+            while idx < len(data):
+                contexts = [i[0] for i in data[idx:idx+batch_size]]
+                responses = [i[1] for i in data[idx:idx+batch_size]]
+                negatives = generate_logic_negative_samples(
+                        contexts, self.es, "retrieval_chatbot", 
+                        samples=samples)
+                for each in zip(contexts, responses, negatives):
+                    d_.append((each[0], [each[1]] + each[2]))
+                idx += batch_size
+                pbar.update(batch_size)
+        if mode in ['train', 'dev']:
+            # concatenate the context and the response
+            for item in tqdm(d_):
+                context, response = item
+                context_id = self.vocab.encode(context)
+                for idx, r in enumerate(response):
+                    bundle = dict()
+                    rid = self.vocab.encode(r)
+                    bundle['context_id'] = context_id + rid[1:]
+                    bundle['label'] = 1 if idx == 0 else 0
+                    self.data.append(bundle)
+        else:
+            for item in tqdm(d_):
+                context, response = item
+                context_id = self.vocab.encode(context)
+                res_ids = [self.vocab.encode(i) for i in response]
+                bundle = dict()
+                bundle['context_id'] = context_id
+                bundle['reply_id'] = res_ids
+                bundle['label'] = [1] + [0] * samples
+                self.data.append(bundle)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        if self.mode in ['train', 'dev']:
+            ids = torch.LongTensor(bundle['context_id'][-self.max_len:])
+        else:
+            ids = []
+            for i in range(len(bundle['reply_id'])):
+                p = bundle['context_id'] + bundle['reply_id'][i][1:]
+                ids.append(torch.LongTensor(p[-self.max_len:]))
+        return ids, bundle['label']
+    
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+class BERTIRMultiDataset(Dataset):
+
+    '''
+    training samples (positive:negative): 1:1
+    test samples (positive:negative) 1:9
+
+    turn_size controls the turn_size of the multi-turn conversations
+    '''
+
+    def __init__(self, path, mode='train', max_len=300, samples=9, turn_size=3, vocab_file='data/vocab/vocab_small'):
+        self.mode = mode
+        data = read_text_data(path)
+        responses = [i[-1] for i in data]
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pp_path = f'{os.path.splitext(path)[0]}_multiir.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data = []
+        sep_id = self.vocab.convert_tokens_to_ids('[SEP]')
+        self.max_len = max_len
+        # collect the samples
+        d_ = []
+        for context, response in data:
+            negative = generate_negative_samples(response, responses, samples=1)
+            d_.append((context, [response] + negative))
+        if mode in ['train', 'dev']:
+            for contexts, responses in tqdm(d_):
+                # recode the [SEP] index after tokenize
+                if contexts.count('[SEP]') < turn_size:
+                    continue
+                contexts_id = self.vocab.encode(contexts)
+                for idx, r in enumerate(responses):
+                    bundle = dict()
+                    rid = self.vocab.encode(r)[1:]    # without [CLS]
+                    ids = contexts_id + rid
+                    if len(ids) > 512:
+                        continue
+                    bundle['ids'] = ids
+                    bundle['label'] = 1 if idx == 0 else 0
+                    bundle['turn_length'] = bundle['ids'].count(sep_id)
+                    sep_index = (np.array(ids) == sep_id).astype(np.int).nonzero()[0]
+                    sep_chunk_size, last_sep = [], 0 
+                    for sep_idx in sep_index:
+                        sep_chunk_size.append(sep_idx - last_sep + 1)
+                        last_sep = sep_idx + 1
+                    bundle['sep_index'] = sep_chunk_size
+                    self.data.append(bundle)
+        else:
+            for item in tqdm(d_):
+                contexts, responses = item
+                contexts_id = [self.vocab.encode(context)[-self.max_len:] for context in contexts]
+                res_ids = [self.vocab.encode(i)[-self.max_len] for i in responses]
+                bundle = dict()
+                bundle['ids'] = contexts_id
+                bundle['replys_id'] = res_ids
+                bundle['label'] = [1] + [0] * samples
+                bundle['turn_length'] = len(bundle['ids']) + 1
+                self.data.append(bundle)
+        self.data = sorted(self.data, key=lambda i:i['turn_length'])
+        print(f'[!] read the processed raw data from {path} over')
+
+    def __len__(self):
+        return len(self.data)
+
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save the dataset into {self.pp_path}')
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+class BERTIRMultiDataLoader:
+
+    def __init__(self, data, shuffle=True, batch_size=16):
+        self.data = data
+        self.data_size = len(data)
+        self.shuffle = shuffle
+        self.batch_size = batch_size
+        self.lengths = [i['turn_length'] for i in self.data.data]
+        self.index, self.pad = 0, 0
+
+    def __iter__(self):
+        return self
+
+    def __len__(self):
+        return self.data_size
+
+    def __next__(self):
+        if self.index >= self.data_size:
+            self.index = 0
+            raise StopIteration
+        else:
+            idx, start1 = self.index, self.lengths[self.index]
+            for l in self.lengths[self.index:self.index+self.batch_size]:
+                if l != start1:
+                    break
+                idx += 1
+            batch = self.data[self.index:idx]    # batch*[turn, seq]
+            if self.shuffle:
+                random.shuffle(batch)
+            self.index = idx
+            if self.data.mode in ['train', 'dev']:
+                # construct the tensor
+                # batch: batch*[turn, seq] -> turn*[batch, seq] with the [PAD]
+                ids = [torch.LongTensor(i['ids']) for i in batch]
+                ids = pad_sequence(ids, batch_first=True, padding_value=self.pad)   # [batch, seq]
+                sep_index = [i['sep_index'] for i in batch]
+                labels = torch.LongTensor([i['label'] for i in batch])
+                # rest: turn_size*[batch, seq]; labels: [batch]
+                if torch.cuda.is_available():
+                    ids = ids.cuda()
+                    labels = labels.cuda()
+                return ids, labels, sep_index
+            else:
+                rest, turn_size = [], len(batch[0])
+                contexts, responses, labels = [item['ids'] for item in batch], [item['replys_ids'] for item in batch], [item['label'] for item in batch]
+                sentences, labels = [], []
+                for i in range(len(batch)):
+                    for r in range(len(responses)):
+                        item = contexts[i] + [responses[i][j]]
+                        sentences.append(item)
+                    labels.extend(batch[i]['label'])
+                # sentences: batch*samples; labels: batch*samples
+                rest = []
+                for i in range(turn_size):
+                    n_batch = [torch.LongTensor(item[i]) for item in sentences]
+                    n_batch = pad_sequence(n_batch, batch_first=True, padding_value=self.pad)
+                    if torch.cuda.is_available():
+                        n_batch = n_batch.cuda()
+                    rest.append(n_batch)
+                if torch.cuda.is_available():
+                    labels = torch.LongTensor(labels).cuda()
+                return rest, labels
+
+class BERTIRDataset(Dataset):
+
+    '''
+    BERT IR Dataset
+    1. train and dev mode only need the binary classification
+    2. test mode needs to consider about the measurement
+    '''
+
+    def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, turn_size=3, max_len=300, samples=9, vocab_file='data/vocab/vocab_small'):
+        self.mode = mode
+        self.max_len = max_len 
+        # data = read_csv_data(path)
+        data = read_text_data(path)
+        # context and response are all the negative samples 
+        responses = [i[1] for i in data]
+        # self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data = []
+        # collect the data samples
+        d_ = []
+        for i in data:
+            context, response = i[0], i[1]
+            negative = generate_negative_samples(response, responses, samples=samples)
+            d_.append((context, [response] + negative))
+        if mode in ['train', 'dev']:
+            # concatenate the context and the response
+            for context, response in tqdm(d_):
+                context_id = self.vocab.encode(context)
+                if len(context_id) < src_min_length:
+                    continue
+                for idx, r in enumerate(response):
+                    bundle = dict()
+                    rid = self.vocab.encode(r)
+                    if len(rid) < tgt_min_length:
+                        continue
+                    bundle['context_id'] = context_id + rid[1:]
+                    bundle['label'] = 1 if idx == 0 else 0
+                    self.data.append(bundle)
+            # NOTE:
+            self.data = sorted(self.data, key=lambda x: len(x['context_id']))
+        else:
+            for item in tqdm(d_):
+                context, response = item
+                context_id = self.vocab.encode(context)
+                res_ids = [self.vocab.encode(i) for i in response]
+                bundle = dict()
+                bundle['context_id'] = context_id
+                bundle['reply_id'] = res_ids
+                bundle['label'] = [1] + [0] * samples
+                self.data.append(bundle)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        if self.mode in ['train', 'dev']:
+            ids = torch.LongTensor(bundle['context_id'][-self.max_len:])
+        else:
+            ids = []
+            for i in range(len(bundle['reply_id'])):
+                p = bundle['context_id'] + bundle['reply_id'][i][1:]
+                ids.append(torch.LongTensor(p[-self.max_len:]))
+        return ids, bundle['label'] 
+    
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+class IRDataset(Dataset):
+
+    '''
+    Dataset for training the IR head.
+    After training one epoch, rebuild it for new negative samples
+
+    Bert-as-service needed
+    '''
+
+    def __init__(self, path, picklepath, mode='train', samples=9, n_vocab=50000):
+        self.mode = mode
+        data = read_csv_data(path)
+        # build the vocab
+        responses = [i[1] for i in data]
+        self.data = []
+        # load the processed data
+        with open(picklepath, 'rb') as f:
+            cs, rs = pickle.load(f)
+            print(f'[!] already load .pkl data for IR training')
+        for idx in tqdm(range(len(data))):
+            item = data[idx]
+            bundle = dict()
+            bundle['context_text'] = item[0].replace('<eou>', '。')
+            bundle['reply_text'] = item[1]
+            bundle['context_emb'] = cs[idx]
+            bundle['reply_emb'] = rs[idx]
+            # random search the idx from the dataset
+            ridx = random.sample(range(len(data)), samples)
+            while idx in ridx:
+                ridx = random.sample(range(len(data)), samples)
+            bundle['negative_text'] = [data[i][1] for i in ridx]
+            bundle['negative_emb'] = [rs[i] for i in ridx]
+            bundle['label'] = [1] + [0] * samples
+            self.data.append(bundle)
+        print(f'[!] {mode} dataset init over, size: {len(self.data)}')
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        cxt, rxt, nxt, label = bundle['context_emb'], bundle['reply_emb'], bundle['negative_emb'], bundle['label']
+        return cxt, rxt, nxt, label
+
+    def __len__(self):
+        return len(self.data)
+
+class DecoupleGPT2RLDataset(Dataset):
+
+    '''
+    GPT2RL Dataset cannot contain the [PAD] token in the batch.
+    So we rewrite the Dataset (sorted with the length) and DataLoader to make sure it.
+
+    The batch size is variable (different length has different the number of the istances),
+    which won't affect the model.
+
+    train/dev/test mode: return the contexts and the responses
+    length of the utterances less than `self.length_threshold` will be droped (useless)
+
+    RL Dataset must make sure that the reply_id + context_id is small than gpt2.n_ctx (300)
+    Default the src_len_size is 280 and tgt_len_size is 20 (faster)
+
+    Construct the keywords vocabulary
+    '''
+
+    def __init__(self, path, vocab_file='data/vocab/vocab_small', kw_length=10, src_len_size=200, tgt_len_size=50, length_threshold=5):
+        assert src_len_size + tgt_len_size <= 300, f'[!] the sum of src and tgt length must small than 300, but got {src_len_size} + {tgt_len_size}'
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.src_len_size, self.tgt_len_size = src_len_size, tgt_len_size
+        self.length_threshold = length_threshold
+        self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+
+        # PREPROCESS
+        data = read_text_data(path)
+        # keywords
+        self.keywords = vocabulary(data, n_vocab=1000)
+        self.data, contexts, responses = [], [], []
+        for idx, sample in enumerate(data):
+            # extremely conversation cases are useless for RL
+            if len(sample[0]) < 10 or len(sample[1]) < 5:
+                continue
+            if len(sample[0]) > src_len_size or len(sample[1]) > tgt_len_size:
+                continue
+            contexts.append(sample[0])
+            responses.append(sample[1])
+        for c, r in tqdm(list(zip(contexts, responses))):
+            bundle = dict()
+            ids = self.vocab.encode(c)
+            ids = ids[-self.src_len_size:]
+            if len(ids) <= self.length_threshold:
+                continue
+            bundle['context_id'] = torch.LongTensor(ids)
+            bundle['context_length'] = len(ids)
+            # keywords
+            keywords = jieba.analyse.extract_tags(
+                    r, kw_length, allowPOS=self.keywords.allowPOS)
+            bundle['keywords_text'] = keywords
+            bundle['keywords_id'] = torch.LongTensor(
+                    self.keywords.toks2idx(keywords, kw_length))
+            ids = self.vocab.encode(r)
+            ids = ids[:self.tgt_len_size]
+            if len(ids) <= self.length_threshold:
+                continue
+            bundle['reply_id'] = torch.LongTensor(ids)
+            self.data.append(bundle)
+        # sort by the context_length from small to big
+        self.data = sorted(self.data, key=lambda i:i['context_length'])
+        print(f'[!] read and process raw data from {path} over')
+
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+class DecoupleGPT2RLDataLoader:
+
+    '''
+    Custom DataLoader for non-pad batch
+    Implement __next__ and __iter__ method
+
+    :shuffle: shuffle in the batch
+    :batch_size: default max size of the batch (maybe smaller)
+    '''
+
+    def __init__(self, data, shuffle=True, batch_size=16):
+        self.data = data
+        self.data_size = len(data)
+        self.shuffle = shuffle
+        self.batch_size = batch_size
+        self.lengths = [i['context_length'] for i in self.data.data]
+        self.index, self.pad = 0, 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        '''
+        return batch as a iterator
+        '''
+        if self.index >= self.data_size:
+            self.index = 0    # reset
+            raise StopIteration
+        else:
+            # decide the dynamic batch size
+            idx, startl = self.index, self.lengths[self.index]
+            for l in self.lengths[self.index:self.index+self.batch_size]:
+                if l != startl:
+                    break
+                idx += 1
+            batch = self.data[self.index:idx]
+            if self.shuffle:
+                random.shuffle(batch)
+            self.index = idx
+            # construct the pytorch tensor and return
+            contexts = [i['context_id'] for i in batch]
+            responses = [i['reply_id'] for i in batch]
+            keywords = [i['keywords_id'] for i in batch]
+            reply_length = [len(i['reply_id']) for i in batch]
+            ctx = torch.stack(contexts)    # [batch, seq]
+            keywords = pad_sequence(
+                    keywords, batch_first=True, 
+                    padding_value=self.data.vocabulary.vocab.stoi['<pad>'])
+            res = pad_sequence(responses, batch_first=True, padding_value=self.pad)
+            if torch.cuda.is_available():
+                ctx, res, keywords = ctx.cuda(), res.cuda(), keywords.cuda()
+            return ctx, keywords, res, reply_length
+
+    def __len__(self):
+        # for tqdm
+        return self.data_size
+
+class GPT2RLDataset(Dataset):
+
+    '''
+    GPT2RL Dataset cannot contain the [PAD] token in the batch.
+    So we rewrite the Dataset (sorted with the length) and DataLoader to make sure it.
+
+    The batch size is variable (different length has different the number of the istances),
+    which won't affect the model.
+
+    train/dev/test mode: return the contexts and the responses
+    length of the utterances less than `self.length_threshold` will be droped (useless)
+
+    RL Dataset must make sure that the reply_id + context_id is small than gpt2.n_ctx (300)
+    Default the src_len_size is 280 and tgt_len_size is 20 (faster)
+
+    Construct the keywords vocabulary
+    '''
+
+    def __init__(self, path, vocab_file='data/vocab/vocab_small', src_len_size=200, tgt_len_size=50, length_threshold=5):
+        assert src_len_size + tgt_len_size <= 512, f'[!] the sum of src and tgt length must small than 300, but got {src_len_size} + {tgt_len_size}'
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.src_len_size, self.tgt_len_size = src_len_size, tgt_len_size
+        self.length_threshold = length_threshold
+        self.pp_path = f'{os.path.splitext(path)[0]}_rl.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+
+        # PREPROCESS
+        data = read_text_data(path)
+        self.data, contexts, responses = [], [], []
+        for idx, sample in enumerate(data):
+            # extremely conversation cases are useless for RL
+            if len(sample[0]) < 10 or len(sample[1]) < 5:
+                continue
+            if len(sample[0]) > src_len_size or len(sample[1]) > tgt_len_size:
+                continue
+            contexts.append(sample[0])
+            responses.append(sample[1])
+        for c, r in tqdm(list(zip(contexts, responses))):
+            bundle = dict()
+            ids = self.vocab.encode(c)
+            ids = ids[-self.src_len_size:]
+            if len(ids) <= self.length_threshold:
+                continue
+            bundle['context_id'] = torch.LongTensor(ids)
+            bundle['context_length'] = len(ids)
+            ids = self.vocab.encode(r)
+            ids = ids[:self.tgt_len_size]
+            if len(ids) <= self.length_threshold:
+                continue
+            bundle['reply_id'] = torch.LongTensor(ids)
+            self.data.append(bundle)
+        # sort by the context_length from small to big
+        self.data = sorted(self.data, key=lambda i:i['context_length'])
+        print(f'[!] read and process raw data from {path} over')
+
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+class GPT2RLDataLoader:
+
+    '''
+    Custom DataLoader for non-pad batch
+    Implement __next__ and __iter__ method
+
+    :shuffle: shuffle in the batch
+    :batch_size: default max size of the batch (maybe smaller)
+    '''
+
+    def __init__(self, data, shuffle=True, batch_size=16):
+        self.data = data
+        self.data_size = len(data)
+        self.shuffle = shuffle
+        self.batch_size = batch_size
+        self.lengths = [i['context_length'] for i in self.data.data]
+        self.index, self.pad = 0, 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        '''
+        return batch as a iterator
+        '''
+        if self.index >= self.data_size:
+            self.index = 0    # reset
+            raise StopIteration
+        else:
+            # decide the dynamic batch size
+            idx, startl = self.index, self.lengths[self.index]
+            for l in self.lengths[self.index:self.index+self.batch_size]:
+                if l != startl:
+                    break
+                idx += 1
+            batch = self.data[self.index:idx]
+            if self.shuffle:
+                random.shuffle(batch)
+            self.index = idx
+            # construct the pytorch tensor and return
+            contexts = [i['context_id'] for i in batch]
+            responses = [i['reply_id'] for i in batch]
+            reply_length = [len(i['reply_id']) for i in batch]
+            ctx = torch.stack(contexts)    # [batch, seq]
+            res = pad_sequence(responses, batch_first=True, padding_value=self.pad)
+            if torch.cuda.is_available():
+                ctx, res = ctx.cuda(), res.cuda()
+            return ctx, res, reply_length
+
+    def __len__(self):
+        # for tqdm
+        return self.data_size
+
+class GPT2LMDataset(Dataset):
+
+    '''
+    GPT2 Chinese LM 
+    corpus from: https://github.com/CLUEbenckmark/CLUE; wiki2019zh
+
+    The preprocessed procedure already makes sure that the max length is 300
+    '''
+
+    def __init__(self, path, min_length=15, src_length_size=300, vocab_file='data/vocab/vocab_small'):
+        super(GPT2LMDataset, self).__init__()
+        self.pad = '[PAD]'
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.pad_id = self.vocab.convert_tokens_to_ids(self.pad)
+        self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        data = read_text_data_noparallel(path)
+        self.data = []
+        for sample in tqdm(data):
+            bundle = dict()
+            ids = self.vocab.encode(sample)
+            if len(ids) < min_length:
+                continue
+            ids = ids[:src_length_size]
+            bundle['context_id'] = torch.LongTensor(ids)
+            self.data.append(bundle)
+        # NOTE:
+        self.data = sorted(self.data, key=lambda x: len(x['context_id']))
+        print(f'[!] read and process raw data from {path} over')
+
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+class KWGPT2Dataset(Dataset):
+
+    def __init__(self, path, mode='train', min_length=25, lang='zh', src_len_size=512, tgt_len_size=128):
+        if lang == 'zh':
+            vocab_file = 'data/vocab/vocab_small'
+        else:
+            vocab_file = 'data/vocab/vocab_english'
+        self.mode = mode
+        # tokenizer with addtional tokens
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        additional_tokens = {'additional_special_tokens': ['[STP]']}
+        self.vocab.add_special_tokens(additional_tokens)
+        self.src_len_size, self.tgt_len_size = src_len_size, tgt_len_size
+        #
+        self.pp_path = f'{os.path.splitext(path)[0]}_kw.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        # 
+        data = read_text_data(path)
+        self.data = []
+        if self.mode in ['train', 'dev']:
+            contexts = [i[0] for i in data]
+            responses = [i[1] for i in data]
+            for ctx, res in tqdm(list(zip(contexts, responses))):
+                bundle = dict()
+                # obtain the keywords
+                keywords = kwgpt2_utils(res)
+                if keywords is None:
+                    continue
+                sample = f'{ctx} [STP] {keywords} [STP] {res} [STP]'
+                bundle['context_text'] = sample
+                ids = self.vocab.encode(sample)[:-1]
+                if len(ids) < min_length:
+                    continue
+                ids = ids[-self.src_len_size:]
+                bundle['context_id'] = torch.LongTensor(ids)
+                self.data.append(bundle)
+            self.data = sorted(self.data, key=lambda x: len(x['context_id']))
+        else:
+            contexts = [i[0] for i in data]
+            responses = [i[1] for i in data]
+            for ctx, res in tqdm(list(zip(contexts, responses))):
+                # DO NOT ADD THE Keywords for the test running mode
+                bundle = dict()
+                # obtain the keywords
+                keywords = kwgpt2_utils(res)
+                if keywords is None:
+                    continue
+                bundle['context_text'] = ctx
+                ctx = f'{ctx} [STP]'
+                ids = self.vocab.encode(ctx)[:-1]    # ignore the final [SEP]
+                if len(ids) < min_length:
+                    continue
+                ids = ids[-self.src_len_size:]
+                bundle['context_id'] = torch.LongTensor(ids)
+                ids = self.vocab.encode(f'{keywords} [STP] {res} [STP]')[1:]   # ignore the [CLS]
+                bundle['reply_id'] = torch.LongTensor(ids)
+                self.data.append(bundle)
+        print(f'[!] read and process raw data from {path} over')
+        # save the data
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+# ========== PONE ========== #
+class PONEDataset(Dataset):
+
+    def __init__(self, path, mode='train', min_length=15, lang='zh', src_len_size=512, tgt_len_size=128):
+        vocab_file = 'bert-base-chinese' if lang == 'zh' else 'bert-base-uncased'
+        self.mode = mode
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+
+        # process dataset
+        self.data = []
+        data = read_text_data(path)
+        d_ = []
+        for i in data:
+            context, response = i[0], i[1]
+            negative = generate_negative_samples(response, responses, samples=samples)
+            d_.append((context, [response] + negative))
+        if mode in ['train', 'dev']:
+            # concatenate the context and the response
+            for context, response in tqdm(d_):
+                context_id = self.vocab.encode(context)
+                if len(context_id) < src_min_length:
+                    continue
+                for idx, r in enumerate(response):
+                    bundle = dict()
+                    rid = self.vocab.encode(r)
+                    if len(rid) < tgt_min_length:
+                        continue
+                    bundle['context_id'] = context_id + rid[1:]
+                    bundle['label'] = 1 if idx == 0 else 0
+                    self.data.append(bundle)
+            # NOTE:
+            self.data = sorted(self.data, key=lambda x: len(x['context_id']))
+        else:
+            for item in tqdm(d_):
+                context, response = item
+                context_id = self.vocab.encode(context)
+                res_ids = [self.vocab.encode(i) for i in response]
+                bundle = dict()
+                bundle['context_id'] = context_id
+                bundle['reply_id'] = res_ids
+                bundle['label'] = [1] + [0] * samples
+                self.data.append(bundle)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        if self.mode in ['train', 'dev']:
+            ids = torch.LongTensor(bundle['context_id'][-self.max_len:])
+        else:
+            ids = []
+            for i in range(len(bundle['reply_id'])):
+                p = bundle['context_id'] + bundle['reply_id'][i][1:]
+                ids.append(torch.LongTensor(p[-self.max_len:]))
+        return ids, bundle['label'] 
+    
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+
+if __name__ == "__main__":
+    # ========== KWGPT2 ========== #
+    train_data = KWGPT2Dataset('./data/train_generative/train.txt', mode='train')
+    train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=gpt2_train_collate_fn)
+    # ========== GPT2Retrieval ========== #
+    # train_data = GPT2Dataset('./data/train_generative/train.txt', mode='train', ensemble=True, candidates_k=2)
+    # train_data.save_pickle()
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=gpt2retrieval_train_collate_fn)
+    # ========== When2Talk ========== #
+    # train_data = When2talkDataset('./data/when2talk/train.txt', mode='train')
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=gpt2_train_collate_fn)
+    # ========== BERTLOGIN ========== #
+    # train_data = BERTLOGICDataset('data/train_retrieval/train.txt')
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_train_collate_fn)
+    # ========== GPT2RL ========== #
+    # train_data = DecoupleGPT2RLDataset('data/decouple_rl/train.txt')
+    # train_iter = DecoupleGPT2RLDataLoader(train_data)
+    # ========== BERTIRMulti ========== #
+    # train_data = BERTIRMultiDataset('data/train_retrieval/train.txt')
+    # train_iter = BERTIRMultiDataLoader(train_data)
+    # ========== Traditional IR ========= #
+    # train_data = IRDataset(
+    #         'data/zh50w/train.csv', 
+    #         'data/zh50w/train.pkl', 
+    #         mode='train', 
+    #         samples=9)
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=ir_collate_fn)
+    # ========== GPT2Dataset ========== #
+    # train_data = GPT2Dataset('./data/zh50w/train.txt', mode='train')
+    # train_iter = DataLoader(train_data, batch_size=10, shuffle=False, collate_fn=gpt2_train_collate_fn)
+    # ========== MultiGPT2 ========== #
+    # train_data = MultiGPT2Dataset('./data/zh50w/train.csv', mode='train')
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=multigpt2_train_collate_fn)
+    # ========== BERTIRDataset ========== #
+    # train_data = BERTIRDataset('data/zh50w/test.csv', mode='test', samples=9)
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_test_collate_fn)
+    # ========== BERTIR ========== #
+    # train_data = BERTNLIDataset('data/NLI/cnsd_snli_v1.0.train.jsonl', mode='train')
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=nli_collate_fn)
+    
+    # ========= ITERATE ========= # 
+    for batch in tqdm(train_iter):
+        ipdb.set_trace()
+    # ========== GPT2RL ITERATE ========== #
+    # with tqdm(total=len(train_iter)) as pbar:
+    #     for batch in train_iter:
+    #         ipdb.set_trace()
+    #         pbar.update(len(batch[0]))
