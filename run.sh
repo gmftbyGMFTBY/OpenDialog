@@ -11,7 +11,7 @@ cuda=$4
 
 if [ $mode = 'init' ]; then
     models=(pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 bertretrieval_multi bertretrieval bertlogic gpt2gan gpt2lm)
-    datasets=(douban300w when2talk empchat dstc7 personachat dailydialog LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
+    datasets=(douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
     mkdir bak ckpt rest
     for m in ${models[@]}
     do
@@ -56,7 +56,7 @@ elif [ $mode = 'train' ]; then
     rm ckpt/$dataset/$model/*
     rm rest/$dataset/$model/*    # clear the tensorboard cache
 
-    english_datasets=(mutual dstc7 empchat dailydialog personachat)
+    english_datasets=(mutual dstc7 empchat dailydialog personachat cornell)
     if [[ ${english_datasets[@]} =~ $dataset ]]; then
         lang='en'
     else
@@ -67,7 +67,7 @@ elif [ $mode = 'train' ]; then
         --dataset $dataset \
         --model $model \
         --mode train \
-        --batch_size 4 \
+        --batch_size 16 \
         --n_vocab 70000 \
         --epoch 50 \
         --seed 30 \

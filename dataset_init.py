@@ -132,6 +132,29 @@ def load_bert_ir_dataset(args):
         data.save_pickle()
     return iter_
 
+def load_pone_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}_pone.txt'
+    if args['mode'] in ['train', 'dev']:
+        data = PONEDataset(path, mode=args['mode'], lang=args['lang'], samples=10, bert=False)
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
+        if not os.path.exists(data.pp_path):
+            data.save_pickle()
+    else:
+        paths = [f'data/annotator/{args["dataset"]}/sample-100.txt',
+                 f'data/annotator/{args["dataset"]}/sample-100-tgt.txt',
+                 f'data/annotator/{args["dataset"]}/pred.txt']
+        human_annotations = [
+                f'data/annotator/{args["dataset"]}/1/annotate.csv',
+                f'data/annotator/{args["dataset"]}/2/annotate.csv',
+                f'data/annotator/{args["dataset"]}/3/annotate.csv',
+                ]
+        data = PONEDataset(
+                paths,
+                mode=args['mode'], lang=args['lang'], bert=False, 
+                human_annotations=human_annotations)
+        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=pone_test_collate_fn)
+    return iter_
+
 def load_bert_logic_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     data = BERTLOGICDataset(path, mode=args['mode'], samples=9)

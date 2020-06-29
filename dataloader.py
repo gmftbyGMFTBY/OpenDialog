@@ -1207,50 +1207,64 @@ class KWGPT2Dataset(Dataset):
 # ========== PONE ========== #
 class PONEDataset(Dataset):
 
-    def __init__(self, path, mode='train', min_length=15, lang='zh', src_len_size=512, tgt_len_size=128):
+    def __init__(self, path, mode='train', lang='zh', src_len_size=512, samples=10, bert=False, human_annotations=None, train_mode='origin'):
         vocab_file = 'bert-base-chinese' if lang == 'zh' else 'bert-base-uncased'
         self.mode = mode
-        self.vocab = BertTokenizer(vocab_file=vocab_file)
-        self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
-        if os.path.exists(self.pp_path):
-            with open(self.pp_path, 'rb') as f:
-                self.data = pickle.load(f)
-            print(f'[!] load preprocessed file from {self.pp_path}')
-            return None
+        self.max_len = src_len_size
+        self.vocab = BertTokenizer.from_pretrained(vocab_file)
+        if mode == 'train':
+            self.pp_path = f'{os.path.splitext(path)[0]}_pone.pkl'
+            if os.path.exists(self.pp_path):
+                with open(self.pp_path, 'rb') as f:
+                    self.data = pickle.load(f)
+                print(f'[!] load preprocessed file from {self.pp_path}')
+                return None
 
         # process dataset
-        self.data = []
-        data = read_text_data(path)
-        d_ = []
-        for i in data:
-            context, response = i[0], i[1]
-            negative = generate_negative_samples(response, responses, samples=samples)
-            d_.append((context, [response] + negative))
-        if mode in ['train', 'dev']:
+        if mode in ['train']:
+            self.data = []
+            # data = read_text_data_nosep(path)
+            data = read_text_data(path)
+            responses = [i[1] for i in data]
+            d_ = []
+            negatives = generate_negative_samples_bm25(
+                    responses, samples=samples, lang=lang, bert=bert)
+            for i, n in zip(data, negatives):
+                context, response = i[0], i[1]
+                d_.append((context, [response] + n))
             # concatenate the context and the response
             for context, response in tqdm(d_):
                 context_id = self.vocab.encode(context)
-                if len(context_id) < src_min_length:
-                    continue
                 for idx, r in enumerate(response):
                     bundle = dict()
                     rid = self.vocab.encode(r)
-                    if len(rid) < tgt_min_length:
-                        continue
+                    bundle['reply_text'] = r
                     bundle['context_id'] = context_id + rid[1:]
                     bundle['label'] = 1 if idx == 0 else 0
                     self.data.append(bundle)
             # NOTE:
             self.data = sorted(self.data, key=lambda x: len(x['context_id']))
         else:
-            for item in tqdm(d_):
-                context, response = item
-                context_id = self.vocab.encode(context)
-                res_ids = [self.vocab.encode(i) for i in response]
+            # test stage only predict
+            assert type(path) == list, f'[!] test stage must input multiple files'
+            assert len(human_annotations) == 3, f'[!] 3 annotators'
+            context_p, groundtruth_p, pred_p = path
+            annotator1, annotator2, annotator3 = human_annotations
+            self.data = []
+
+            context_data, groundtruth_data, pred_data = read_text_data_noparallel(context_p), read_text_data_noparallel(groundtruth_p), read_text_data_noparallel(pred_p)
+            annotator1, annotator2, annotator3 = read_annotation(annotator1), read_annotation(annotator2), read_annotation(annotator3)
+
+            for context, response, pred, a1, a2, a3 in tqdm(list(zip(context_data, groundtruth_data, pred_data, annotator1, annotator2, annotator3))):
                 bundle = dict()
-                bundle['context_id'] = context_id
-                bundle['reply_id'] = res_ids
-                bundle['label'] = [1] + [0] * samples
+                context_id = self.vocab.encode(context)
+                rid = self.vocab.encode(response)
+                pid = self.vocab.encode(pred)
+                c1 = context_id + rid[1:]
+                c2 = context_id + pid[1:]
+                bundle['groundtruth'] = c1
+                bundle['pred'] = c2
+                bundle['human_scores'] = (a1, a2, a3)
                 self.data.append(bundle)
 
     def __len__(self):
@@ -1258,14 +1272,13 @@ class PONEDataset(Dataset):
 
     def __getitem__(self, i):
         bundle = self.data[i]
-        if self.mode in ['train', 'dev']:
+        if self.mode in ['train']:
             ids = torch.LongTensor(bundle['context_id'][-self.max_len:])
+            return ids, bundle['label'] 
         else:
-            ids = []
-            for i in range(len(bundle['reply_id'])):
-                p = bundle['context_id'] + bundle['reply_id'][i][1:]
-                ids.append(torch.LongTensor(p[-self.max_len:]))
-        return ids, bundle['label'] 
+            ids = torch.LongTensor(bundle['pred'][-self.max_len:])
+            annotations = bundle['human_scores']
+            return ids, annotations 
     
     def save_pickle(self):
         with open(self.pp_path, 'wb') as f:
@@ -1273,9 +1286,12 @@ class PONEDataset(Dataset):
         print(f'[!] save dataset into {self.pp_path}')
 
 if __name__ == "__main__":
+    # ========== PONE ========== #
+    train_data = PONEDataset('data/dailydialog/train.txt', mode='train', lang='en', bert=False)
+    train_data.save_pickle()
     # ========== KWGPT2 ========== #
-    train_data = KWGPT2Dataset('./data/train_generative/train.txt', mode='train')
-    train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=gpt2_train_collate_fn)
+    # train_data = KWGPT2Dataset('./data/train_generative/train.txt', mode='train')
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=gpt2_train_collate_fn)
     # ========== GPT2Retrieval ========== #
     # train_data = GPT2Dataset('./data/train_generative/train.txt', mode='train', ensemble=True, candidates_k=2)
     # train_data.save_pickle()

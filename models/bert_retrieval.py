@@ -24,6 +24,8 @@ class BERTRetrieval(nn.Module):
                 input_ids=inpt,
                 attention_mask=attn_mask)
         logits = output[0]    # [batch, 2]
+        # softmax be used in this function
+        logits = F.softmax(logits, dim=1)
         return logits 
 
 class BERTRetrievalAgent(RetrievalBaseAgent):
@@ -84,7 +86,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             total_loss += loss.item()
             batch_num += 1
             
-            now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
+            now_correct = torch.max(output, dim=-1)[1]    # [batch]
             now_correct = torch.sum(now_correct == label).item()
             correct += now_correct
             s += len(label)
@@ -108,7 +110,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
 
                 # output: [batch, 2]
                 # only use the positive score as the final score
-                output = F.softmax(output, dim=-1)[:, 1]    # [batch]
+                output = output[:, 1]    # [batch]
 
                 preds = [i.tolist() for i in torch.split(output, self.args['samples'])]
                 labels = [i.tolist() for i in torch.split(label, self.args['samples'])]
@@ -126,7 +128,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             utterances_, ids = self.process_utterances(topic, msgs)
             # rerank, ids: [batch, seq]
             output = self.model(ids)    # [batch, 2]
-            output = F.softmax(output, dim=-1)[:, 1]    # [batch]
+            output = output[:, 1]    # [batch]
             item = torch.argmax(output).item()
             msg = utterances_[item]
             return msg
@@ -134,6 +136,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
     def reverse_search(self, ctx, ctx_, res):
         '''
         ctx/res: a list of string
+        NOTE: Should remove the F.softmax in this function, set it into the forward
         '''
         with torch.no_grad():
             utterances_ = self.searcher.search(None, ctx, samples=self.args['talk_samples'])
@@ -160,7 +163,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         with torch.no_grad():
             utterances_, ids = self.process_utterances(topic, msgs)
             output = self.model(ids)
-            output = F.softmax(output, dim=-1)[:, 1]
+            output = output[:, 1]
             # argsort
             indexs = torch.argsort(output, descending=True)[:topk]
             msgs = [utterances_[index] for index in indexs]

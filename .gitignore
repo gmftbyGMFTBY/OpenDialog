@@ -129,4 +129,5 @@ ckpt/
 !data/process_data.py
 !data/stopwords.txt
 !data/run.sh
+!data/runbert.sh
 !requirements.txt

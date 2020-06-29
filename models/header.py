@@ -33,6 +33,8 @@ from transformers import BertForSequenceClassification, BertModel
 from transformers import AutoModelWithLMHead, AutoTokenizer
 import transformers
 import requests
+# for PONE
+from scipy.stats import pearsonr, spearmanr
 
 import sys
 sys.path.append('..')

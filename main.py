@@ -30,6 +30,8 @@ def load_dataset(args):
     elif args['model'] == 'gpt2':
         args['mmi'] = False
         return load_gpt2_dataset(args)
+    elif args['model'] == 'pone':
+        return load_pone_dataset(args)
     elif args['model'] == 'pfgpt2':
         return load_pfgpt2_dataset(args)
     elif args['model'] == 'gpt2_mmi':
@@ -83,6 +85,7 @@ def main(**args):
             'bertnli': BERTNLIAgent,
             'gpt2gan': GPT2RLAgent,
             'gpt2gan_v2': GPT2RLAgent_V2,
+            'pone': PONEAgent,
             }
     parameter_map, parameter_key = collect_parameter_4_model(args)
     agent = agent_map[args['model']](*parameter_map, **parameter_key)

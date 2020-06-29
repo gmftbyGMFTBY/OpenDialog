@@ -4,31 +4,24 @@ class PONE(nn.Module):
 
     def __init__(self, lang='zh'):
         super(PONE, self).__init__()
-        model = 'bert-base-chinese' if lang == 'zh' else 'bert-base-uncased'
+        model_name = 'bert-base-chinese' if lang == 'zh' else 'bert-base-uncased'
         self.model = BertForSequenceClassification.from_pretrained(
-                model_name, num_labels=2)
+                model_name, num_labels=1)    # regression
 
-    @torch.no_grad()
     def forward_(self, inpt):
         '''
         inpt: [batch, seq]
         '''
         attn_mask = generate_attention_mask(inpt)
         output = self.model(input_ids=inpt, attention_mask=attn_mask)
-        logits = output[0]    # [batch, 2]
+        logits = output[0]    # [batch, 1]
         return logits
 
     def forward(self, inpt):
         logits = self.forward_(inpt)
+        logits = torch.sigmoid(logits.squeeze(1))    # [batch]
         return logits
 
-    def predict(self, inpt):
-        '''
-        return the positive scores as the final results
-        '''
-        logits = self.forward_(inpt)    # [batch, 2]
-        return logits[:, 1]    # [batch]
-    
 class PONEAgent(BaseAgent):
     
     '''
@@ -51,21 +44,21 @@ class PONEAgent(BaseAgent):
                 'lr': 1e-5,
                 'grad_clip': 3.0,
                 'multi_gpu': self.gpu_ids,
-                'pad': 0,
                 'lang': lang,
         }
         self.model = PONE(lang=lang)
         if torch.cuda.is_available():
             self.model.cuda()
-        self.model = DataParallel(self.model, device_ids=self.gpu_ids)
-        # bert model is too big, try to use the DataParallel
+        if run_mode == 'train':
+            self.model = DataParallel(self.model, device_ids=self.gpu_ids)
         self.optimizer = transformers.AdamW(
                 self.model.parameters(),
                 lr=self.args['lr'])
-        self.criterion = nn.CrossEntropyLoss()
+        # self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.BCELoss()
         self.show_parameters(self.args)
     
-    def train_model_origin(self, train_iter):
+    def train_model(self, train_iter, mode='train'):
         self.model.train()
         total_loss, batch_num = 0, 0
         pbar = tqdm(train_iter)
@@ -73,11 +66,10 @@ class PONEAgent(BaseAgent):
         for idx, batch in enumerate(pbar):
             # label: [batch]
             cid, label = batch
+            label = label.float()
             self.optimizer.zero_grad()
-            output = self.model(cid)    # [batch, 2]
-            loss = self.criterion(
-                    output, 
-                    label.view(-1))
+            output = self.model(cid)    # [batch]
+            loss = self.criterion(output, label)
             if mode == 'train':
                 loss.backward()
                 clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
@@ -85,9 +77,11 @@ class PONEAgent(BaseAgent):
 
             total_loss += loss.item()
             batch_num += 1
-            
-            now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
-            now_correct = torch.sum(now_correct == label).item()
+
+            output = output >= 0.5
+            now_correct = torch.sum(output.float() == label).item()
+            # now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
+            # now_correct = torch.sum(now_correct == label).item()
             correct += now_correct
             s += len(label)
 
@@ -95,14 +89,50 @@ class PONEAgent(BaseAgent):
         print(f'[!] overall loss: {total_loss}; overall acc: {round(correct/s, 4)}')
         return round(total_loss / batch_num, 4)
 
-    def train_model(self, train_iter, mode='origin'):
-        if mode == 'origin':
-            self.train_model_origin(train_iter)
-        elif mode == 'weighted':
-            self.train_model_weighted(train_iter)
-        elif mode == 'positive':
-            self.train_model_positive(train_iter)
-        elif mode == 'pone':
-            self.train_model_pone(train_iter)
-        else:
-            raise Exception(f'[!] unknown training mode: {mode}')
+    def test_model(self, test_iter, mode='test'):
+        '''
+        calculate the human correlation
+        '''
+        self.model.eval()
+        pbar = tqdm(test_iter)
+        fluency, coherence, engagement, overall, predscores = {}, {}, {}, {}, []
+        for idx, batch in enumerate(pbar):
+            cid, scores = batch
+            output = self.model(cid)    # [batch]
+            predscores.extend(output.tolist())
+            for annotations in scores: 
+                for aidx, annotation in enumerate(annotations):
+                    try:
+                        fluency[aidx].append(annotation[0])
+                        coherence[aidx].append(annotation[1])
+                        engagement[aidx].append(annotation[2])
+                        overall[aidx].append(annotation[3])
+                    except:
+                        fluency[aidx] = [annotation[0]]
+                        coherence[aidx] = [annotation[1]]
+                        engagement[aidx] = [annotation[2]]
+                        overall[aidx] = [annotation[3]]
+        # calculate the correlation (spearman and perason)
+        for i in range(3):
+            fluency_ = fluency[i]
+            coherence_ = coherence[i]
+            engagement_ = engagement[i]
+            overall_ = overall[i]
+
+            p, pp = pearsonr(fluency_, predscores)
+            s, ss = spearmanr(fluency_, predscores)
+            p, pp, s, ss = round(p, 5), round(pp, 5), round(s, 5), round(ss, 5)
+            print(f'[!] Fluency pearson(p): {p}({pp}); spearman(p): {s}({ss})')
+            p, pp = pearsonr(coherence_, predscores)
+            s, ss = spearmanr(coherence_, predscores)
+            p, pp, s, ss = round(p, 5), round(pp, 5), round(s, 5), round(ss, 5)
+            print(f'[!] Coherence pearson(p): {p}({pp}); spearman(p): {s}({ss})')
+            p, pp = pearsonr(engagement_, predscores)
+            s, ss = spearmanr(engagement_, predscores)
+            p, pp, s, ss = round(p, 5), round(pp, 5), round(s, 5), round(ss, 5)
+            print(f'[!] Engagement pearson(p): {p}({pp}); spearman(p): {s}({ss})')
+            p, pp = pearsonr(overall_, predscores)
+            s, ss = spearmanr(overall_, predscores)
+            p, pp, s, ss = round(p, 5), round(pp, 5), round(s, 5), round(ss, 5)
+            print(f'[!] Overall pearson(p): {p}({pp}); spearman(p): {s}({ss})')
+            print(f'========== ========== ==========')
