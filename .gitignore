@@ -117,7 +117,7 @@ venv.bak/
 tblogs
 # events.out.tfevents*
 rest/
-data/
+# data/
 bak/
 ckpt/
 *pretrained

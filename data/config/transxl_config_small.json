@@ -1,0 +1,8 @@
+{
+    "layer_norm_epsilon": 1e-05,
+    "init_range": 0.01,
+    "n_head": 6,
+    "n_layer": 6,
+    "d_model": 768,
+    "vocab_size": 13317,
+}
