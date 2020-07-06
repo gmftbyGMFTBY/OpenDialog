@@ -61,6 +61,7 @@ class GPT2(nn.Module):
     def predict_batch(self, inpt_ids, max_len):
         '''
         inpt_ids: [batch, seq]
+        return: samples*[batch]
         '''
         # change inpt_ids from [seq] to [batch, seq]
         generated = []
@@ -242,6 +243,39 @@ class GPT2Agent(BaseAgent):
             else:
                 raise exception
         return round(total_loss/batch_num, 4)
+
+    def test_model_samples(self, test_iter, path, samples=5):
+        '''
+        Generate `samples` candidates for one given conversation context
+        '''
+        def filter(x):
+            if '[SEP]' in x:
+                x = x[:x.index('[SEP]')]
+            return x.replace('[PAD]', '').replace('[SEP]', '').strip()
+        self.model.eval()
+        pbar = tqdm(test_iter)
+        max_size = self.args['tgt_len_size']
+        with open(path, 'w') as f:
+            for batch in pbar:
+                c, r = batch    # c: [seq]
+                c = c.unsqueeze(0)    # [1, seq]
+                c_ = c.expand(samples, c.shape[-1])    # [samples(batch), seq] 
+                tgt = self.model.predict_batch(c_, max_size)
+                tgt = [self.vocab.convert_ids_to_tokens(i) for i in tgt]
+                tgt = [filter(' '.join(i)) for i in tgt]
+                
+                ctx = self.vocab.convert_ids_to_tokens(c[0])
+                ctx = ' '.join(ctx)
+
+                ref = self.vocab.convert_ids_to_tokens(r)
+                ref = ' '.join(ref)
+
+                f.write(f'CTX: {ctx}\n')
+                f.write(f'REF: {ref}\n')
+                for idx, i in enumerate(tgt):
+                    f.write(f'TGT{idx}: {i}\n')
+                f.write('\n')
+        print(f'[!] translate test dataset over, write into {path}')
 
     def test_model(self, test_iter, path):
         '''

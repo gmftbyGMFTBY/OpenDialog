@@ -75,7 +75,7 @@ def load_gpt2_dataset(args):
         iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=gpt2_train_collate_fn)
     else:
         data = GPT2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'], reversed=args['mmi'])
-        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=gpt2_test_collate_fn)
+        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=gpt2_test_collate_fn)
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     return iter_
@@ -136,7 +136,7 @@ def load_pone_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}_pone.txt'
     if args['mode'] in ['train', 'dev']:
         data = PONEDataset(path, mode=args['mode'], lang=args['lang'], samples=10, bert=False)
-        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=pone_train_collate_fn)
         if not os.path.exists(data.pp_path):
             data.save_pickle()
     else:

@@ -109,9 +109,11 @@ def main(**args):
     else:
         # load best model
         test_iter = load_dataset(args)
-        agent.load_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
+        # agent.load_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
+        # NOTE
+        agent.load_model(f'ckpt/train_generative/gpt2/best.pt')
         rest_path = f'rest/{args["dataset"]}/{args["model"]}/rest.txt'
-        test_loss = agent.test_model(test_iter, rest_path)
+        test_loss = agent.test_model_samples(test_iter, rest_path)    # NOTE
 
     if args['mode'] == 'train':
         sum_writer.close()

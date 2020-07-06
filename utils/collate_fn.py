@@ -225,11 +225,24 @@ def bert_ir_test_collate_fn(batch):
     return cxt, label
 
 def pone_test_collate_fn(batch):
-    data, a = [], []
+    ctx, res, a = [], [], []
     for i in batch:
-        data.append(i[0])
+        ctx.append(i[0])
         a.append(i[1])    # [data_size, 3 annotators, 4 scores]
-    cxt = pad_sequence(data, batch_first=True, padding_value=0)
+    cxt = pad_sequence(ctx, batch_first=True, padding_value=0)
     if torch.cuda.is_available():
         cxt = cxt.cuda()
     return cxt, a
+
+def pone_train_collate_fn(batch):
+    pad = 0
+    cxt, res, label = [], [], []
+    for i in batch:
+        cxt.append(i[0])
+        label.append(i[1])
+    cxt = pad_sequence(cxt, batch_first=True, padding_value=pad)    # [batch, seq]
+
+    label = torch.tensor(label, dtype=torch.long)    # [batch]
+    if torch.cuda.is_available():
+        cxt, label = cxt.cuda(), label.cuda()
+    return cxt, label

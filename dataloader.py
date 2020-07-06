@@ -271,8 +271,9 @@ class GPT2Dataset(Dataset):
                     bundle['context_text'] = c
                     bundle['reply_text'] = r
                     ids = self.vocab.encode(c)
-                    if len(ids) < min_length:
-                        continue
+                    # NOTE: Data Augmentation Delete these two lines
+                    # if len(ids) < min_length:
+                    #     continue
                     # length size of the context
                     ids = ids[-self.src_len_size:]
                     bundle['context_id'] = torch.LongTensor(ids)
@@ -1227,10 +1228,14 @@ class PONEDataset(Dataset):
             data = read_text_data(path)
             responses = [i[1] for i in data]
             d_ = []
-            negatives = generate_negative_samples_bm25(
-                    responses, samples=samples, lang=lang, bert=bert)
-            for i, n in zip(data, negatives):
+            # negatives = generate_negative_samples_bm25(
+            #         responses, samples=samples, lang=lang, bert=bert)
+            # for i, n in zip(data, negatives):
+            #     context, response = i[0], i[1]
+            #     d_.append((context, [response] + n))
+            for i in data:
                 context, response = i[0], i[1]
+                n = generate_negative_samples(response, responses, samples=samples)
                 d_.append((context, [response] + n))
             # concatenate the context and the response
             for context, response in tqdm(d_):
@@ -1238,7 +1243,6 @@ class PONEDataset(Dataset):
                 for idx, r in enumerate(response):
                     bundle = dict()
                     rid = self.vocab.encode(r)
-                    bundle['reply_text'] = r
                     bundle['context_id'] = context_id + rid[1:]
                     bundle['label'] = 1 if idx == 0 else 0
                     self.data.append(bundle)
@@ -1259,11 +1263,7 @@ class PONEDataset(Dataset):
                 bundle = dict()
                 context_id = self.vocab.encode(context)
                 rid = self.vocab.encode(response)
-                pid = self.vocab.encode(pred)
-                c1 = context_id + rid[1:]
-                c2 = context_id + pid[1:]
-                bundle['groundtruth'] = c1
-                bundle['pred'] = c2
+                bundle['pred'] = context_id + rid[1:]
                 bundle['human_scores'] = (a1, a2, a3)
                 self.data.append(bundle)
 

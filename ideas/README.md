@@ -77,3 +77,4 @@
 - [ ] 检验gpt2retrieval，查看检索式模型是否可以有效增强生成模型的效果，和kwgpt2做对比看看，如果kwgpt2效果更好那就不用gpt2retrieval模型了，因为gpt2retrieval模型在训练之前还需要大量的实践收集对应的检索式对话候选回复用来做先验条件
 - [ ] 使用 Micro and Macro Distinct 作为 multiview 的额外评价指标
 - [ ] trigger sentence 合并到当前的句子上下文的后面，用来加强topic信息
+- [ ] bm25筛选负样本训练检索式对话效果有提升
