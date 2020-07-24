@@ -3,7 +3,7 @@
 # only backup the text file
 rm -rf backup
 mkdir -p backup
-folder=(zh50w zhihu MTDialogRewritten ECG zhidao kgdialog kdconv doubangroup xiaohuangji weibo400w ptt qingyun11w douban300w)
+folder=(zh50w zhihu MTDialogRewritten ECG zhidao kgdialog kdconv doubangroup xiaohuangji weibo400w ptt qingyun11w douban300w topic)
 
 for path in ${folder[@]}
 do
@@ -54,6 +54,8 @@ do
         cp $path/test.txt backup/$path
         cp $path/train.txt backup/$path
         cp $path/train_.txt backup/$path
+    elif [ $path = 'topic' ]; then
+        cp $path/train.txt backup/$path
     else
         echo "[!] got unknow dataset $path"
     fi

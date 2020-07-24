@@ -181,7 +181,7 @@ class GPT2Agent(BaseAgent):
             self.reranker = MultiView(
                     topic=True,
                     length=False,
-                    nidf_tf=False,
+                    nidf_tf=True,
                     coherence=True,
                     fluency=False,
                     repetition_penalty=True,

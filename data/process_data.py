@@ -82,15 +82,26 @@ def collect_samples_qq(index_name):
     def insert_data(pairs):
         tool.insert_pairs(pairs)
         print(f'{tool.es.count(index=index_name)["count"]} utterances in database')
-    # NOTE: delete zhihu, weibo400w for the hash mode
-    single_turn.remove('zhihu')
-    single_turn.remove('weibo400w')
     for i in single_turn:
         insert_data(filter_useless(make_pairs(read_dataset(i), qa=True)))
         print(f'[!] finish insert the {i} dataset')
     for i in multi_turn:
         insert_data(filter_useless(make_pairs(read_dataset(i), qa=True)))
         print(f'[!] finish insert the {i} dataset')
+
+# ======== only insert the zh50w dataset into collect_sample_qq ========== #
+def collect_samples_qq_zh50w(index_name):
+    '''
+    if insert new dataset, just set parameters `create_index` as False
+    '''
+    tool = ESUtils(index_name, create_index=True)
+    print(f'[!] {index_name} elasticsearch database created')
+    def insert_data(pairs):
+        tool.insert_pairs(pairs)
+        print(f'{tool.es.count(index=index_name)["count"]} utterances in database')
+    i = 'zh50w'
+    insert_data(filter_useless(make_pairs(read_dataset(i), qa=True)))
+    print(f'[!] finish insert the {i} dataset')
 
 def collect_samples_qa(index_name):
     '''
@@ -106,7 +117,8 @@ if __name__ == "__main__":
     args = vars(args)
     if args['mode'] == 'insert':
         # collect_samples_qq('retrieval_database')
-        collect_samples_qq('retrieval_database')
+        # collect_samples_qq('retrieval_database')
+        collect_samples_qq_zh50w('zh50w_database')
     elif args['mode'] == 'generative':
         # train, test mode (99:1), without dev
         # prepare the generative dataset

@@ -46,6 +46,8 @@ pip install -r requirements.txt
 
 ### 3. 准备数据
 
+百度云链接: https://pan.baidu.com/s/1qwUj6xevOIPr_7v7apwA0A; 提取码: 3erj
+
 ### 4. 预处理数据
 
 ### 5. 训练模型

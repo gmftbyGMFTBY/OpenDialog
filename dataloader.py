@@ -715,6 +715,15 @@ class BERTIRDataset(Dataset):
     BERT IR Dataset
     1. train and dev mode only need the binary classification
     2. test mode needs to consider about the measurement
+    
+    
+    Aspects:
+    1. fluency
+    2. coherence
+    3. diversity
+    4. naturalness: 
+        * maybe the BM25 model is used for selecting the topic-close but unnatural response for the given context (intuitively, the BM25 retrieval-based dialog systems always unnatural for the given context, so maybe this operation is very helpful)
+        * the human annotation should be statistised to analyze whether the responses retrieved by the BM25 is the unnatural.
     '''
 
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
@@ -761,9 +770,8 @@ class BERTIRDataset(Dataset):
             elif negative_aspect == 'diversity':
                 negative = generate_negative_samples_diversity(response, responses, samples=samples, nidf=NIDF)
             elif negative_aspect == 'naturalness':
-                # maybe the BM25 model is used for selecting the topic-close but unnatural response for the given context (intuitively, the BM25 retrieval-based dialog systems always unnatural for the given context, so maybe this operation is very helpful)
-                # the human annotation should be statistised to analyze whether the responses retrieved by the BM25 is the unnatural.
-                pass
+                eschator = ESChat('zh50w_database', kb=False)
+                negative = generate_negative_samples_bm25(context, response, samples=samples, bm25Model=eschator)
             else:
                 raise Exception(f'[!] except to use fluency; coherence; diversity aspects. But got {negative_aspect}')
             d_.append((context, [response] + negative))
@@ -1351,7 +1359,7 @@ if __name__ == "__main__":
     # train_data = MultiGPT2Dataset('./data/zh50w/train.csv', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=multigpt2_train_collate_fn)
     # ========== BERTIRDataset ========== #
-    train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='diversity')
+    train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='naturalness')
     train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_test_collate_fn)
     # ========== BERTIR ========== #
     # train_data = BERTNLIDataset('data/NLI/cnsd_snli_v1.0.train.jsonl', mode='train')

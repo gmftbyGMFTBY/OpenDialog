@@ -15,8 +15,6 @@ def generate_negative_samples_fluency(r, responses, samples=10, ratio=0.2, vocab
     Retrieval the samples from responses and make the perturbation on them
     to generate the unfluency negative samples for training the bert_multiview model
 
-    The bm25 model even can be used
-
     Fluency perturbation:
     1. shuffle
     2. random drop
@@ -59,46 +57,26 @@ def generate_negative_samples(r, responses, samples=10):
         negative = random.sample(responses, samples)
     return negative
 
-def generate_negative_samples_bm25(responses, samples=10, lang='zh', bert=False):
-    if bert:
-        print(f'[!] Make sure the bert-as-service is running; language is {lang}')
-        bc = BertClient()
-    # init the bm25 agent
-    query = []
-    for r in tqdm(responses):
-        if lang == 'zh':
-            query.append(list(jieba.cut(r)))
-        else:
-            query.append(r.split())
-    bm25Model = bm25.BM25(query)
-    # search the similar
-    rest = []
-    for q in tqdm(query):
-        scores = bm25Model.get_scores(q)
-        scores = np.array(scores)
-        idx = np.argpartition(scores, -200)[-200:]
-        texts = [query[i] for i in idx if query[i] != q]
-        if bert:
-            # use bert to choose the most half similar and half not similar
-            sep_token = '' if lang == 'zh' else ' '
-            convert_texts = [sep_token.join(q)] + [sep_token.join(i) for i in texts]
-            convert_texts = convert_texts[:50]
-            embeddings = bc.encode(convert_texts)    # [batch, 768]
-            g_e = embeddings[0]
-            n_e = embeddings[1:]
-            scores = np.dot(g_e, n_e.T) / np.linalg.norm(g_e) / np.linalg.norm(n_e, axis=1)
-            idx = np.argpartition(scores, -samples)[-samples:]
-            convert_texts = convert_texts[1:]
-            texts = [convert_texts[i] for i in idx]
-            rest.append(texts)
-        else:
-            rest.append(texts[:samples])
-    # rest: [dataset_size, samples] (list)
-    data = []
-    sep_token = '' if lang == 'zh' else ' '
-    for i in rest:
-        data.append([sep_token.join(j) for j in i])
-    return data
+def generate_negative_samples_bm25(query, response, strategy='topk', pool_size=256, samples=10, lang='zh', bm25Model=None):
+    '''
+    Query-Answer matching: find the responses that have the similar topic with the query
+    '''
+    rest = bm25Model.search(None, response, samples=pool_size)
+    # ipdb.set_trace()
+    rest = [i['response'] for i in rest]
+    if response in rest:
+        rest.remove(response)
+
+    # strategy 1: random sampling
+    if strategy == 'random':
+        negative = random.sample(rest, samples)
+    elif strategy == 'topk':
+        negative = rest[:samples]
+    elif strategy == 'embedding':
+        pass
+    else:
+        raise Exception(f'[!] unknow strategy {strategy}')
+    return negative
 
 def generate_logic_negative_samples(r, es, index_name, samples=10):
     '''
