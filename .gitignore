@@ -113,6 +113,8 @@ venv.bak/
 *.pyc
 *.bin
 *.xlsx
+*.tgz
+*.tar.gz
 .ipynb_checkpoints
 tblogs
 # events.out.tfevents*
