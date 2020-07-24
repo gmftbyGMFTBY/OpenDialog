@@ -1,11 +1,57 @@
 import random
+import numpy as np
+import torch
 from tqdm import tqdm
 import ipdb
 import json
 import numpy as np
 from gensim.summarization import bm25
 from bert_serving.client import BertClient
+from .fluency_perturbation import *
 import jieba
+
+def generate_negative_samples_fluency(r, responses, samples=10, ratio=0.2, vocab=None):
+    '''
+    Retrieval the samples from responses and make the perturbation on them
+    to generate the unfluency negative samples for training the bert_multiview model
+
+    The bm25 model even can be used
+
+    Fluency perturbation:
+    1. shuffle
+    2. random drop
+    3. duplication
+    4. replace
+    '''
+    negative = generate_negative_samples(r, responses, samples=samples)    # samples
+    contains = []
+    for i in negative:
+        p = [
+                shuffle(i), drop(i, ratio=ratio), 
+                duplication(i, ratio=ratio), replace(vocab, i, ratio=ratio)
+            ]
+        contains.append(random.choice(p))
+    return contains
+
+def generate_negative_samples_diversity(r, responses, samples=10, nidf=None, temp=0.05):
+    '''
+    1. Distinct: prefer short response
+    2. Length: prefer long response
+    3. NIDF
+    '''
+    negative = random.sample(responses, 512)    # sampling pool size
+    if not nidf:
+        raise Exception(f'[!] need the NIDF diversity model')
+    scores = nidf.scores(negative, topk=5)
+    # apply the softmax with the temperature
+    scores = torch.tensor(scores) / temp 
+    scores = torch.nn.functional.softmax(scores, dim=0).numpy()
+    # renorm to obtain the 1 probability
+    scores /= sum(scores)
+    # select the lowest diversity scores as the diversity negative samples
+    index = np.random.choice(range(len(scores)), size=samples, p=scores)
+    negative = [negative[i] for i in index]
+    return negative
 
 def generate_negative_samples(r, responses, samples=10):
     negative = random.sample(responses, samples)

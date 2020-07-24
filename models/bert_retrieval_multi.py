@@ -5,6 +5,96 @@ BERT for text matching (trained by negative sampling)
 Deep mining the relations among the sentences: logic modeling; using the transformers
 '''
 
+class BERTMULTIVIEW(nn.Module):
+
+    '''
+    Multiview for automatic evaluation and retrieval-based dialog system
+    1. Fluency
+    2. Coherence
+    3. Diversity
+    '''
+
+    def __init__(self):
+        super(BERTMULTIVIEW, self).__init__()
+        self.model = BertModel.from_pretrained('bert-base-chinses')
+        self.fluency_middle = nn.Linear(768, 256)
+        self.fluency_head = nn.Linear(256, 2)
+        
+        self.coherence_middle = nn.Linear(768, 256)
+        self.coherence_head = nn.Linear(256, 2)
+
+        self.diversity_middle = nn.Linear(768, 256)
+        self.diversity_head = nn.Linear(256, 2)
+        
+        self.final_head = nn.Linear(256*3, 2)
+
+    def forward(self, inpt):
+        '''
+        :inpt: [batch, seq]
+
+        return:
+        :heads: [batch, 2]
+        ::
+        '''
+        attn_mask = generate_attention_mask(inpt)
+        output = self.model(input_ids=inpt, attention_mask=attn_mask)[0]    # [batch, seq, 768]
+        output = torch.mean(output, dim=1)    # [batch, 768]
+
+        fluency_ = self.fluency_middle(output)    # [batch, 256]
+        fluency_rest = self.fluency_head(F.relu(fluency_))    # [batch, 2]
+        coherence_ = self.coherence_middle(output)    # [batch, 256]
+        coherence_rest = self.coherence_head(F.relu(coherence_))    # [batch, 2]
+        diversity_ = self.diversity_middle(output)    # [batch, 256]
+        diveristy_rest = self.diversity_head(F.relu(diversity_))    # [batch, 2]
+
+        # final head
+        heads = torch.cat([fluency_, coherence_, diversity_], 1)    # [batch, 256*3]
+        heads = self.final_head(F.relu(heads))    # [batch, 2]
+        return heads, fluency_rest, coherence_rest, diversity_rest
+
+
+class BERTMULTIVIEWAgent():
+
+    def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=False):
+        super(BERTMULTIVIEWAgent, self).__init__(kb=kb)
+        try:
+            self.gpu_ids = list(range(len(multi_gpu.split(','))))
+        except:
+            raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
+        self.args = {
+                'lr': 3e-5,
+                'pad': 0,
+                'vocab_file': 'data/vocab/small',
+                'talk_samples': 256,
+                'multi_gpu': self.gpu_ids,
+                'grad_clip': 3.0,
+        }
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.model = BERTMULTIVIEW()
+        if torch.cuda.is_available():
+            self.model.cuda()
+        self.model = DataParallel(self.model, device_ids=self.gpu_ids)
+        self.optimizer = transformers.AdamW(
+                self.model.parameters(),
+                lr=self.args['lr'])
+        self.criterion = nn.CrossEntropyLoss()
+
+        self.show_parameters(self.args)
+
+    def train_model(self, train_iter, mode='train', recoder=None):
+        '''
+        :labels: [batch]; 0-Positive, 1-FluencyNegative, 2-CoherenceNegative, 3-DiversityNegative
+        '''
+        self.model.train()
+        total_loss, batch_num = 0, 0
+        correct, s = 0, 0
+        for idx, batch in enumerate(train_iter):
+            cid, label = batch
+            self.optimizer.zero_grad()
+            
+
+
+
 class BERTRetrieval_Multi(nn.Module):
 
     def __init__(self, nipt=768, nhead=8, dim_feedforward=512, dropout=0.5, nlayers=6):

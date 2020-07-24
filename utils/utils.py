@@ -191,6 +191,14 @@ def kwgpt2_utils(sentence, topk=10):
     # conver to string: [w1] [SEP] [w2] [SEP] ...
     return ' [SEP] '.join(words)
 
+def make_vocabs(responses):
+    words = set()
+    for r in tqdm(response):
+        r = list(jieba.cut(r))
+        words |= set(r)
+    print(f'[!] obtain {len(words)} words from the responses')
+    return list(words)
+
 # ========== wechat api ==========
 def reply_text(to_user, from_user, content):
     reply = '''<xml><ToUserName><![CDATA[%s]]></ToUserName><FromUserName><![CDATA[%s]]></FromUserName><CreateTime>%s</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[%s]]></Content><FuncFlag>0</FuncFlag></xml>'''

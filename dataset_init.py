@@ -132,6 +132,17 @@ def load_bert_ir_dataset(args):
         data.save_pickle()
     return iter_
 
+def load_bert_ir_multiview_dataset(args):
+    iters = []
+    for aspect in ['diversity', 'fluency', 'coherence']:
+        path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+        if args['mode'] in ['train', 'dev']:
+            data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect=aspect)
+            iter_ = DataLoader(data, shuffle=True, batch_size=arggs['batch_size'], collate_fn=bert_ir_train_collate_fn)
+        if not os.path.exists(data.pp_path):
+            data.save_pickle()
+    return iters
+
 def load_pone_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}_pone.txt'
     if args['mode'] in ['train', 'dev']:

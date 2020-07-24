@@ -23,7 +23,7 @@ if args['model'] == 'bertretrieval':
 elif args['model'] == 'gpt2':
     # available run_mode: test, rerank, rerank_ir
     agent = GPT2Agent(1000, args['multi_gpu'], run_mode='rerank')
-    agent.load_model(f'ckpt/train_generative/gpt2/best.pt.bak')
+    agent.load_model(f'ckpt/train_generative/gpt2/best.pt')
 elif args['model'] == 'when2talk':
     agent = When2TalkAgent(1000, args['multi_gpu'], run_mode='test')
     agent.load_model(f'ckpt/when2talk/when2talk/best.pt')
@@ -85,7 +85,7 @@ def wechat_api():
         my_nonce = request.args.get('nonce')
         my_echostr = request.args.get('echostr')
 
-        token = 'xxxxxxxx'    # your token
+        token = 'gmftbyGMFTBY'    # your token
 
         data = [token, my_timestamp, my_nonce]
         data.sort()

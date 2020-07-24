@@ -35,6 +35,7 @@ from torch.nn.utils.rnn import pad_sequence
 from data import generate_negative_samples
 from models.model_utils import ESChat
 from elasticsearch import Elasticsearch
+from multiview.diversity import *
 
 logging.getLogger("elasticsearch").setLevel(logging.WARNING)
 logging.getLogger("transformers").setLevel(logging.WARNING)

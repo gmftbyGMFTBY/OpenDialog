@@ -180,10 +180,10 @@ class GPT2Agent(BaseAgent):
             print(f'[!] MultiView reranker model will be initized')
             self.reranker = MultiView(
                     topic=True,
-                    length=True,
-                    nidf_tf=True,
+                    length=False,
+                    nidf_tf=False,
                     coherence=True,
-                    fluency=True,
+                    fluency=False,
                     repetition_penalty=True,
                     mmi=True,
                     distinct=True,
@@ -308,7 +308,7 @@ class GPT2Agent(BaseAgent):
         print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Length(max, min, avg): {c_max_l}/{c_min_l}/{c_avg_l}|{r_max_l}/{r_min_l}/{r_avg_l}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
     
     @torch.no_grad()
-    def talk(self, topic, msgs, maxlen=50, batch_size=16):
+    def talk(self, topic, msgs, maxlen=50, batch_size=32):
         '''
         topic, msgs: msgs is a string which split with the [SEP] token
         batch size is 1
@@ -321,10 +321,11 @@ class GPT2Agent(BaseAgent):
             self.reranker.mode['topic'] = False
         else:
             # detect the topic of the msgs
-            if not self.reranker.topic_scores(msgs, topic):
-                trigger_s = random.choice(self.trigger_utterances[topic])
-                msgs = f'{trigger_s} [SEP] {msgs}'
-                print(f'[!] topic trigger mode is set up: {msgs}')
+            if self.args['run_mode'] in ['rerank', 'rerank_ir']:
+                if not self.reranker.topic_scores(msgs, topic):
+                    trigger_s = random.choice(self.trigger_utterances[topic])
+                    msgs = f'{trigger_s} [SEP] {msgs}'
+                    print(f'[!] topic trigger mode is set up: {msgs}')
         # tokenizer
         if self.args['run_mode'] == 'test':
             msgs = torch.LongTensor(self.vocab.encode(msgs)[-(512-maxlen):])

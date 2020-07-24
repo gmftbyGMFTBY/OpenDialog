@@ -717,7 +717,9 @@ class BERTIRDataset(Dataset):
     2. test mode needs to consider about the measurement
     '''
 
-    def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, turn_size=3, max_len=300, samples=9, vocab_file='data/vocab/vocab_small'):
+    def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
+                 turn_size=3, max_len=300, samples=9, vocab_file='data/vocab/vocab_small',
+                 negative_aspect='coherence'):
         self.mode = mode
         self.max_len = max_len 
         # data = read_csv_data(path)
@@ -726,19 +728,46 @@ class BERTIRDataset(Dataset):
         responses = [i[1] for i in data]
         # self.vocab = BertTokenizer(vocab_file=vocab_file)
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
-        self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
+        self.pp_path = f'{os.path.splitext(path)[0]}_{negative_aspect}.pkl'
         if os.path.exists(self.pp_path):
             with open(self.pp_path, 'rb') as f:
                 self.data = pickle.load(f)
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
         self.data = []
+
         # collect the data samples
         d_ = []
-        for i in data:
+        if negative_aspect == 'diversity':
+            NIDF = NIDF_TF()
+        elif negative_aspect == 'fluency':
+            vocab_path = f'{os.path.split(path)[0]}/fluency_vocab.pkl'
+            if os.path.exists(vocab_path):
+                with open(vocab_path, 'rb') as f:
+                    vocabs = pickle.load(f)
+                print('[!] load preprosedd vocab file for fluency perturbation')
+            else:
+                print(f'[!] begin to collect the vocabs for the fluency perturbation')
+                vocabs = make_vocabs(responses)
+                with open(vocab_path, 'wb') as f:
+                    pickle.dump(vocabs, f)
+                print(f'[!] save the vocabs in {vocab_path}')
+        for i in tqdm(data):
             context, response = i[0], i[1]
-            negative = generate_negative_samples(response, responses, samples=samples)
+            if negative_aspect == 'coherence':
+                negative = generate_negative_samples(response, responses, samples=samples)
+            elif negative_aspect == 'fluency':
+                negative = generate_negative_samples_fluency(response, responses, samples=samples, vocab=vocabs)
+            elif negative_aspect == 'diversity':
+                negative = generate_negative_samples_diversity(response, responses, samples=samples, nidf=NIDF)
+            elif negative_aspect == 'naturalness':
+                # maybe the BM25 model is used for selecting the topic-close but unnatural response for the given context (intuitively, the BM25 retrieval-based dialog systems always unnatural for the given context, so maybe this operation is very helpful)
+                # the human annotation should be statistised to analyze whether the responses retrieved by the BM25 is the unnatural.
+                pass
+            else:
+                raise Exception(f'[!] except to use fluency; coherence; diversity aspects. But got {negative_aspect}')
             d_.append((context, [response] + negative))
+
         if mode in ['train', 'dev']:
             # concatenate the context and the response
             for context, response in tqdm(d_):
@@ -1287,8 +1316,8 @@ class PONEDataset(Dataset):
 
 if __name__ == "__main__":
     # ========== PONE ========== #
-    train_data = PONEDataset('data/dailydialog/train.txt', mode='train', lang='en', bert=False)
-    train_data.save_pickle()
+    # train_data = PONEDataset('data/dailydialog/train.txt', mode='train', lang='en', bert=False)
+    # train_data.save_pickle()
     # ========== KWGPT2 ========== #
     # train_data = KWGPT2Dataset('./data/train_generative/train.txt', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=gpt2_train_collate_fn)
@@ -1322,8 +1351,8 @@ if __name__ == "__main__":
     # train_data = MultiGPT2Dataset('./data/zh50w/train.csv', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=multigpt2_train_collate_fn)
     # ========== BERTIRDataset ========== #
-    # train_data = BERTIRDataset('data/zh50w/test.csv', mode='test', samples=9)
-    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_test_collate_fn)
+    train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='diversity')
+    train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_test_collate_fn)
     # ========== BERTIR ========== #
     # train_data = BERTNLIDataset('data/NLI/cnsd_snli_v1.0.train.jsonl', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=nli_collate_fn)
