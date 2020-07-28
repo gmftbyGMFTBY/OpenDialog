@@ -95,7 +95,10 @@ class RepetitionPenalty:
             for v in values:
                 if v >= self.ic:
                     counter += v
-            ratio = counter / sum(values) 
+            try:
+                ratio = counter / sum(values) 
+            except:
+                ratio = 1
             s.append(1-ratio)
         return s
 
@@ -191,7 +194,7 @@ class NIDF_TF():
         self.idf_max, self.idf_min = max(self.idf_count), min(self.idf_count)
         print(f'[!] load IDF data and words from {self.args["rest_path"]}')
 
-    def scores(self, responses, topk=3):
+    def scores(self, responses, topk=3, tf=False):
         responses_ = []
         for i in responses:
             i = [j[0] for j in self.cutter.cut(i)]
@@ -199,23 +202,25 @@ class NIDF_TF():
             # i = list(set(i))    # filter the duplicated terms
             responses_.append(i)
         scores = []
+        delta = self.idf_max - self.idf_min
         for response in responses_:
-            # tf
-            p_tf = []
-            for w in response:
-                index = self.words.index(w)
-                ntf = self.tf_count[index]
-                p_tf.append(ntf)
-            if len(p_tf) == 0:
-                p_tf = 0
-            else:
-                p_tf = np.mean(p_tf)
+            if tf:
+                # tf
+                p_tf = []
+                for w in response:
+                    index = self.words.index(w)
+                    ntf = self.tf_count[index]
+                    p_tf.append(ntf)
+                if len(p_tf) == 0:
+                    p_tf = 0
+                else:
+                    p_tf = np.mean(p_tf)
             # idf
             response = list(set(response))    # duplicated words influence the NIDF performance
             p_idf = []
             for w in response:
                 index = self.words.index(w)
-                nidf = (self.idf_count[index] - self.idf_min) / (self.idf_max - self.idf_min)
+                nidf = (self.idf_count[index] - self.idf_min) / delta 
                 p_idf.append(nidf)
             if len(p_idf) == 0:
                 # scores.append(np.mean(self.idf_count))
@@ -224,7 +229,10 @@ class NIDF_TF():
                 # average is not appriproate, the long responses will obtain the low scores
                 # should average the topk idf(s)
                 p_idf = np.mean(sorted(p_idf, reverse=True)[:topk])
-            scores.append(self.args['factor_tf'] * p_tf + self.args['factor_idf'] * p_idf)
+            if tf:
+                scores.append(self.args['factor_tf'] * p_tf + self.args['factor_idf'] * p_idf)
+            else:
+                scores.append(p_idf)
         return scores
 
 if __name__ == "__main__":

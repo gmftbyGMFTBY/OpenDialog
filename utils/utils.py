@@ -7,7 +7,7 @@ def collect_parameter_4_model(args):
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'pone':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
-    elif args['model'] == 'bertretrieval_multi':
+    elif args['model'] == 'bertretrieval_multiview':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'bertnli':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}

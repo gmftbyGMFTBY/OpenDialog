@@ -17,6 +17,7 @@ class BERTMULTIVIEW(nn.Module):
     def __init__(self):
         super(BERTMULTIVIEW, self).__init__()
         self.model = BertModel.from_pretrained('bert-base-chinses')
+
         self.fluency_middle = nn.Linear(768, 256)
         self.fluency_head = nn.Linear(256, 2)
         
@@ -25,10 +26,16 @@ class BERTMULTIVIEW(nn.Module):
 
         self.diversity_middle = nn.Linear(768, 256)
         self.diversity_head = nn.Linear(256, 2)
-        
-        self.final_head = nn.Linear(256*3, 2)
 
-    def forward(self, inpt):
+        self.naturalness_middle = nn.Linear(768, 256)
+        self.naturalness_head = nn.Linear(256, 2)
+        
+        self.relatedness_middle = nn.Linear(768, 256)
+        self.relatedness_head = nn.Linear(256, 2)
+        
+        self.final_head = nn.Linear(256*5, 2)
+
+    def forward(self, inpt, aspect='coherence'):
         '''
         :inpt: [batch, seq]
 
@@ -46,14 +53,36 @@ class BERTMULTIVIEW(nn.Module):
         coherence_rest = self.coherence_head(F.relu(coherence_))    # [batch, 2]
         diversity_ = self.diversity_middle(output)    # [batch, 256]
         diveristy_rest = self.diversity_head(F.relu(diversity_))    # [batch, 2]
+        naturalness_ = self.naturalness_middle(output)    # [batch, 256]
+        naturalness_rest = self.naturalness_head(F.relu(naturalness_))    # [batch, 2]
+        relatedness_ = self.relatedness_middle(output)    # [batch, 256]
+        relatedness_rest = self.relatedness_head(F.relu(relateddness_))    # [batch, 2]
 
         # final head
-        heads = torch.cat([fluency_, coherence_, diversity_], 1)    # [batch, 256*3]
+        heads = torch.cat([relatedness_, fluency_, coherence_, diversity_, naturalness_], 1)    # [batch, 256*3]
         heads = self.final_head(F.relu(heads))    # [batch, 2]
-        return heads, fluency_rest, coherence_rest, diversity_rest
+        if aspect == 'coherence':
+            target = coherence_rest
+        elif aspect == 'fluency':
+            target = fluency_rest
+        elif aspect == 'diversity':
+            target = diversity_rest
+        elif aspect == 'naturalness':
+            target = naturalness_rest 
+        elif aspect == 'relatedness':
+            target = relatedness_rest
+        elif aspect == 'overall':
+            target = [relatedness_rest, coherence_rest, fluency_rest, diversity_rest, naturalness_rest]
+        else:
+            raise Exception(f'[!] target aspect {aspect} is unknown')
+        return target
 
 
 class BERTMULTIVIEWAgent():
+    
+    '''
+    BERTMULTIVIEWAgent do not need the test dataset, the test dataset will be used by the `talk` function.
+    '''
 
     def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=False):
         super(BERTMULTIVIEWAgent, self).__init__(kb=kb)
@@ -81,20 +110,57 @@ class BERTMULTIVIEWAgent():
 
         self.show_parameters(self.args)
 
-    def train_model(self, train_iter, mode='train', recoder=None):
+    def train_model(self, train_iters, mode='train', recoder=None):
         '''
         :labels: [batch]; 0-Positive, 1-FluencyNegative, 2-CoherenceNegative, 3-DiversityNegative
+        train_iters contain four iterator (each for each aspect)
         '''
         self.model.train()
         total_loss, batch_num = 0, 0
         correct, s = 0, 0
-        for idx, batch in enumerate(train_iter):
-            cid, label = batch
-            self.optimizer.zero_grad()
-            
+        order = ['diversity', 'fluency', 'coherence', 'naturalness', 'relatedness']
+        with tqdm(total=len(train_iters[0])*4) as pbar:
+            for idx, batches in enumerate(zip(train_iters)):
+                for batch, aspect in zip(batches, order):
+                    cid, label = batch
+                    self.optimizer.zero_grad()
+                    output = self.model(cid, aspect=aspect)    # [batch, 2]
+                    loss = self.criterion(
+                            output, 
+                            label.view(-1))
+                    if mode == 'train':
+                        loss.backward()
+                        clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+                        self.optimizer.step()
 
+                    total_loss += loss.item()
+                    batch_num += 1
 
+                    now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
+                    now_correct = torch.sum(now_correct == label).item()
+                    correct += now_correct
+                    s += len(label)
+                    
+                    pbar.update(len(label))
+                    pbar.set_description(f'[!] batch: {batch_num}; train loss: {round(loss.item(), 4)}; acc(running|overall): {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
+                    pbar.update(len(label))
+        print(f'[!] overall acc: {round(correct/s, 4)}')
+        return round(total_loss / batch_num, 4)
+    
+    def talk(self, topic, msgs):
+        with torch.no_grad():
+            # retrieval and process
+            utterances_, ids = self.process_utterances(topic, msgs)
+            # rerank, ids: [batch, seq]
+            outputs = self.model(ids, aspect='overall')    # 4*[batch, 2]
+            outputs = [F.softmax(output, dim=-1)[:, 1] for output in outputs]    # 4*[batch]
+            # combine these scores
+            output = torch.stack(outputs).mean(dim=0)    # [4, batch] -> [batch]
+            item = torch.argmax(output).item()
+            msg = utterances_[item]
+            return msg
 
+'''
 class BERTRetrieval_Multi(nn.Module):
 
     def __init__(self, nipt=768, nhead=8, dim_feedforward=512, dropout=0.5, nlayers=6):
@@ -109,10 +175,8 @@ class BERTRetrieval_Multi(nn.Module):
         self.classifier = nn.Linear(nipt, 2)
 
     def forward(self, inpts, sep_index):
-        '''
-        inpts: [batch, seq]
-        sep_index: batch*[turn_size list]
-        '''
+        # inpts: [batch, seq]
+        # sep_index: batch*[turn_size list]
         # Obtain the Bert embedding of all the utterances (include response)
         seq_size = inpts.shape[-1]
         attn_mask = generate_attention_mask(inpts)
@@ -138,10 +202,6 @@ class BERTRetrieval_Multi(nn.Module):
         return logits 
 
 class BERTRetrievalMultiAgent(RetrievalBaseAgent):
-
-    '''
-    Support Multi GPU, for example '1,2'
-    '''
 
     def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=False):
         super(BERTRetrievalMultiAgent, self).__init__(kb=kb)
@@ -251,3 +311,4 @@ class BERTRetrievalMultiAgent(RetrievalBaseAgent):
             item = torch.argmax(output).item()
             msg = utterances_[item]
             return msg
+'''

@@ -724,6 +724,8 @@ class BERTIRDataset(Dataset):
     4. naturalness: 
         * maybe the BM25 model is used for selecting the topic-close but unnatural response for the given context (intuitively, the BM25 retrieval-based dialog systems always unnatural for the given context, so maybe this operation is very helpful)
         * the human annotation should be statistised to analyze whether the responses retrieved by the BM25 is the unnatural.
+        * naturalness may need the label filter algorithm to ignore the noises
+    5. relatedness
     '''
 
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
@@ -748,7 +750,19 @@ class BERTIRDataset(Dataset):
         # collect the data samples
         d_ = []
         if negative_aspect == 'diversity':
+            # PROCESS ALL THE DATASET AND FIND THE TOP-10000 in-diversity samnples
             NIDF = NIDF_TF()
+            responses_ = random.sample(responses, 50000)
+            idx, bsz_diveristy, diversity_scores = 0, 512, []
+            with tqdm(total=len(responses_)) as pbar:
+                while idx < len(responses_):
+                    samples = responses_[idx:idx+bsz_diveristy]
+                    bsz_ = len(samples)
+                    diversity_scores.extend(NIDF.scores(samples, topk=5))
+                    pbar.update(bsz_)
+                    idx += bsz_
+            sort_index = np.argsort(diversity_scores)[:1000]
+            diversity_negative = [responses_[i] for i in sort_index]
         elif negative_aspect == 'fluency':
             vocab_path = f'{os.path.split(path)[0]}/fluency_vocab.pkl'
             if os.path.exists(vocab_path):
@@ -761,20 +775,43 @@ class BERTIRDataset(Dataset):
                 with open(vocab_path, 'wb') as f:
                     pickle.dump(vocabs, f)
                 print(f'[!] save the vocabs in {vocab_path}')
-        for i in tqdm(data):
-            context, response = i[0], i[1]
-            if negative_aspect == 'coherence':
-                negative = generate_negative_samples(response, responses, samples=samples)
-            elif negative_aspect == 'fluency':
-                negative = generate_negative_samples_fluency(response, responses, samples=samples, vocab=vocabs)
-            elif negative_aspect == 'diversity':
-                negative = generate_negative_samples_diversity(response, responses, samples=samples, nidf=NIDF)
-            elif negative_aspect == 'naturalness':
-                eschator = ESChat('zh50w_database', kb=False)
-                negative = generate_negative_samples_bm25(context, response, samples=samples, bm25Model=eschator)
-            else:
-                raise Exception(f'[!] except to use fluency; coherence; diversity aspects. But got {negative_aspect}')
-            d_.append((context, [response] + negative))
+        elif negative_aspect in ['relatedness', 'naturalness']:
+            eschator = ESChat('zh50w_database', kb=False)
+            if negative_aspect == 'relatedness':
+                w2v = load_w2v('data/chinese_w2v')
+        else:
+            raise Exception(f'[!] got unknow negative aspect {negative_aspect}')
+            
+        if negative_aspect in ['naturalness', 'relatedness']:
+            # too slow, use multisearch for speeding up
+            with tqdm(total=len(data)) as pbar:
+                idx, bsz = 0, 128
+                while idx < len(data):
+                    items = data[idx:idx+bsz]
+                    bsz_ = len(items)
+                    contexts_, responses_ = [i[0] for i in items], [i[1] for i in items]
+                    if negative_aspect == 'naturalness':
+                        negatives = generate_negative_samples_naturalness(responses_, samples=samples, bm25Model=eschator, pool_size=128)
+                    elif negative_aspect == 'relatedness':
+                        # or "Semantic relatedness"
+                        negatives = generate_negative_samples_relatedness(responses_, samples=samples, bm25Model=eschator, pool_size=64, w2v=w2v, embedding_function=convert_text_embedding)
+                    idx += bsz_
+                    for c, r, n in zip(contexts_, responses_, negatives):
+                        # ipdb.set_trace()
+                        d_.append((c, [r] + n))
+                    pbar.update(bsz_)
+        else:
+            for i in tqdm(data):
+                context, response = i[0], i[1]
+                if negative_aspect == 'coherence':
+                    negative = generate_negative_samples(response, responses, samples=samples)
+                elif negative_aspect == 'fluency':
+                    negative = generate_negative_samples_fluency(response, samples=samples, vocab=vocabs)
+                elif negative_aspect == 'diversity':
+                    negative = generate_negative_samples_diversity(response, diversity_negative, samples=samples)
+                else:
+                    raise Exception(f'[!] got unkonow negative aspect {negative_aspect}')
+                d_.append((context, [response] + negative))
 
         if mode in ['train', 'dev']:
             # concatenate the context and the response
@@ -1359,7 +1396,7 @@ if __name__ == "__main__":
     # train_data = MultiGPT2Dataset('./data/zh50w/train.csv', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=multigpt2_train_collate_fn)
     # ========== BERTIRDataset ========== #
-    train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='naturalness')
+    train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='coherence')
     train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_test_collate_fn)
     # ========== BERTIR ========== #
     # train_data = BERTNLIDataset('data/NLI/cnsd_snli_v1.0.train.jsonl', mode='train')

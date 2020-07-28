@@ -49,8 +49,8 @@ def load_dataset(args):
         return load_multigpt2_dataset(args)
     elif args['model'] == 'bertretrieval':
         return load_bert_ir_dataset(args)
-    elif args['model'] == 'bertretrieval_multi':
-        return load_bert_ir_multi_dataset(args)
+    elif args['model'] == 'bertretrieval_multiview':
+        return load_bert_ir_multiview_dataset(args)
     elif args['model'] == 'bertnli':
         return load_bert_nli_dataset(args)
     elif args['model'] == 'bertlogic':
@@ -80,7 +80,7 @@ def main(**args):
             'gpt2lm': GPT2Agent,
             'multigpt2': MultiGPT2Dataset,
             'bertretrieval': BERTRetrievalAgent,
-            'bertretrieval_multi': BERTRetrievalMultiAgent,
+            'bertretrieval_multiview': BERTMULTIVIEWAgent,
             'bertlogic': BERTRetrievalAgent,
             'bertnli': BERTNLIAgent,
             'gpt2gan': GPT2RLAgent,

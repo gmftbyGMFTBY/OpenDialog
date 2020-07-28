@@ -210,6 +210,19 @@ class ESUtils:
             })
         helpers.bulk(self.es, actions) 
         print(f'[!] retrieval database size: {self.es.count(index=self.index)["count"]}')
+        
+    def insert_pairs_(self, pairs):
+        count = self.es.count(index=self.index)['count']
+        actions = []
+        for i, qa in enumerate(tqdm(pairs)):
+            actions.append({
+                '_index': self.index,
+                '_id': i + count,
+                'context': qa,
+                'response': qa,
+            })
+        helpers.bulk(self.es, actions) 
+        print(f'[!] retrieval database size: {self.es.count(index=self.index)["count"]}')
 
 class ESChat:
 

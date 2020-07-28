@@ -5,6 +5,9 @@ rm -rf backup
 mkdir -p backup
 folder=(zh50w zhihu MTDialogRewritten ECG zhidao kgdialog kdconv doubangroup xiaohuangji weibo400w ptt qingyun11w douban300w topic)
 
+# bakcup the necessary word embedding files
+cp chinese_w2v.txt english_w2v.bin backup
+
 for path in ${folder[@]}
 do
     echo "[!] backup $path folder"

@@ -46,6 +46,19 @@ def read_dataset(name):
     print(f'[!] read dataset {name} over, get {len(dialogs)} dialogs')
     return dialogs
 
+def read_dataset_(name):
+    path = f'{name}/train_.txt'
+    with open(path) as f:
+        data = f.read()
+        data = data.split('\n\n')
+        utterances = []
+        for i in data:
+            if i.strip():
+                utterances.extend(i.split('\n'))
+    utterances = list(set(utterances))
+    print(f'[!] read dataset {name} over, get {len(utterances)} utterances')
+    return utterances
+
 def filter_useless(pairs):
     words = ['图片评论', '如图']
     rest = []
@@ -97,10 +110,10 @@ def collect_samples_qq_zh50w(index_name):
     tool = ESUtils(index_name, create_index=True)
     print(f'[!] {index_name} elasticsearch database created')
     def insert_data(pairs):
-        tool.insert_pairs(pairs)
+        tool.insert_pairs_(pairs)
         print(f'{tool.es.count(index=index_name)["count"]} utterances in database')
     i = 'zh50w'
-    insert_data(filter_useless(make_pairs(read_dataset(i), qa=True)))
+    insert_data(read_dataset_(i))
     print(f'[!] finish insert the {i} dataset')
 
 def collect_samples_qa(index_name):
