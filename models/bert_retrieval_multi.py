@@ -16,7 +16,7 @@ class BERTMULTIVIEW(nn.Module):
 
     def __init__(self):
         super(BERTMULTIVIEW, self).__init__()
-        self.model = BertModel.from_pretrained('bert-base-chinses')
+        self.model = BertModel.from_pretrained('bert-base-chinese')
 
         self.fluency_middle = nn.Linear(768, 256)
         self.fluency_head = nn.Linear(256, 2)
@@ -32,8 +32,6 @@ class BERTMULTIVIEW(nn.Module):
         
         self.relatedness_middle = nn.Linear(768, 256)
         self.relatedness_head = nn.Linear(256, 2)
-        
-        self.final_head = nn.Linear(256*5, 2)
 
     def forward(self, inpt, aspect='coherence'):
         '''
@@ -41,6 +39,8 @@ class BERTMULTIVIEW(nn.Module):
 
         return:
         :heads: [batch, 2]
+        
+        aspect is overall, return all the values: [relatedness, coherence, fluency, diversity, naturalness]
         ::
         '''
         attn_mask = generate_attention_mask(inpt)
@@ -57,10 +57,6 @@ class BERTMULTIVIEW(nn.Module):
         naturalness_rest = self.naturalness_head(F.relu(naturalness_))    # [batch, 2]
         relatedness_ = self.relatedness_middle(output)    # [batch, 256]
         relatedness_rest = self.relatedness_head(F.relu(relateddness_))    # [batch, 2]
-
-        # final head
-        heads = torch.cat([relatedness_, fluency_, coherence_, diversity_, naturalness_], 1)    # [batch, 256*3]
-        heads = self.final_head(F.relu(heads))    # [batch, 2]
         if aspect == 'coherence':
             target = coherence_rest
         elif aspect == 'fluency':
@@ -78,7 +74,7 @@ class BERTMULTIVIEW(nn.Module):
         return target
 
 
-class BERTMULTIVIEWAgent():
+class BERTMULTIVIEWAgent(RetrievalBaseAgent):
     
     '''
     BERTMULTIVIEWAgent do not need the test dataset, the test dataset will be used by the `talk` function.
@@ -116,10 +112,10 @@ class BERTMULTIVIEWAgent():
         train_iters contain four iterator (each for each aspect)
         '''
         self.model.train()
-        total_loss, batch_num = 0, 0
-        correct, s = 0, 0
+        batch_num = 0
         order = ['diversity', 'fluency', 'coherence', 'naturalness', 'relatedness']
-        with tqdm(total=len(train_iters[0])*4) as pbar:
+        with tqdm(total=len(train_iters[0])*len(order)) as pbar:
+            stats = {i: {'correct': 0, 's': 0, 'total_loss': 0} for i in order}
             for idx, batches in enumerate(zip(train_iters)):
                 for batch, aspect in zip(batches, order):
                     cid, label = batch
@@ -132,20 +128,19 @@ class BERTMULTIVIEWAgent():
                         loss.backward()
                         clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
                         self.optimizer.step()
-
-                    total_loss += loss.item()
-                    batch_num += 1
-
-                    now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
+                        
+                    stats[aspect]['total_loss'] += loss.item()
+                    now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]
                     now_correct = torch.sum(now_correct == label).item()
-                    correct += now_correct
-                    s += len(label)
+                    stats[aspect]['correct'] += now_correct
+                    stats[aspect]['s'] += len(label)
                     
-                    pbar.update(len(label))
-                    pbar.set_description(f'[!] batch: {batch_num}; train loss: {round(loss.item(), 4)}; acc(running|overall): {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
-                    pbar.update(len(label))
-        print(f'[!] overall acc: {round(correct/s, 4)}')
-        return round(total_loss / batch_num, 4)
+                average_acc = np.mean([stats[i]['correct']/stats[i]['s'] for i in order])
+                average_loss = np.mean([stats[i]['total_loss']/batch_num for i in order])
+                pbar.set_description(f'[!] avg_loss: {round(average_loss, 4)}; avg_acc:{round(average_acc, 4)}')
+                pbar.update(len(label))
+                batch_num += 1
+        return round(average_loss)
     
     def talk(self, topic, msgs):
         with torch.no_grad():

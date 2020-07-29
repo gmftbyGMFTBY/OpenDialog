@@ -30,7 +30,11 @@ def generate_negative_samples_fluency(r, samples=10, ratio=0.2, vocab=None, dupl
                 duplication(r, ratio=ratio), 
                 replace(vocab, r, ratio=ratio)
             ])
-    contains = random.sample(contains, samples)
+    contains = list(set(contains))
+    if len(contains) <= samples:
+        pass
+    else:
+        contains = random.sample(contains, samples)
     return contains
 
 def generate_negative_samples_diversity(r, responses, samples=10):

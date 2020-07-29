@@ -751,16 +751,25 @@ class BERTIRDataset(Dataset):
         d_ = []
         if negative_aspect == 'diversity':
             # PROCESS ALL THE DATASET AND FIND THE TOP-10000 in-diversity samnples
-            NIDF = NIDF_TF()
-            responses_ = random.sample(responses, 50000)
-            idx, bsz_diveristy, diversity_scores = 0, 512, []
-            with tqdm(total=len(responses_)) as pbar:
-                while idx < len(responses_):
-                    samples = responses_[idx:idx+bsz_diveristy]
-                    bsz_ = len(samples)
-                    diversity_scores.extend(NIDF.scores(samples, topk=5))
-                    pbar.update(bsz_)
-                    idx += bsz_
+            diversity_path = f'{os.path.split(path)[0]}/diversity_scores.pkl'
+            if os.path.exists(diversity_path):
+                with open(diversity_path, 'rb') as f:
+                    diversity_scores, responses_ = pickle.load(f)
+                print(f'[!] load pre-trained diversity scores')
+            else:
+                NIDF = NIDF_TF()
+                responses_ = random.sample(responses, 50000)
+                idx, bsz_diveristy, diversity_scores = 0, 512, []
+                with tqdm(total=len(responses_)) as pbar:
+                    while idx < len(responses_):
+                        samples_ = responses_[idx:idx+bsz_diveristy]
+                        bsz_ = len(samples_)
+                        diversity_scores.extend(NIDF.scores(samples_, topk=5))
+                        pbar.update(bsz_)
+                        idx += bsz_
+                with open(diversity_path, 'wb') as f:
+                    pickle.dump((diversity_scores, responses_), f)
+                print(f'[!] save the pre-trained diversity scores into {diversity_path}')
             sort_index = np.argsort(diversity_scores)[:1000]
             diversity_negative = [responses_[i] for i in sort_index]
         elif negative_aspect == 'fluency':
@@ -768,7 +777,7 @@ class BERTIRDataset(Dataset):
             if os.path.exists(vocab_path):
                 with open(vocab_path, 'rb') as f:
                     vocabs = pickle.load(f)
-                print('[!] load preprosedd vocab file for fluency perturbation')
+                print('[!] load preprosed vocab file for fluency perturbation')
             else:
                 print(f'[!] begin to collect the vocabs for the fluency perturbation')
                 vocabs = make_vocabs(responses)
@@ -779,6 +788,8 @@ class BERTIRDataset(Dataset):
             eschator = ESChat('zh50w_database', kb=False)
             if negative_aspect == 'relatedness':
                 w2v = load_w2v('data/chinese_w2v')
+        elif negative_aspect == 'coherence':
+            pass
         else:
             raise Exception(f'[!] got unknow negative aspect {negative_aspect}')
             
@@ -812,6 +823,7 @@ class BERTIRDataset(Dataset):
                 else:
                     raise Exception(f'[!] got unkonow negative aspect {negative_aspect}')
                 d_.append((context, [response] + negative))
+        print(f'[!] collect the dataset over, prepare to process them')
 
         if mode in ['train', 'dev']:
             # concatenate the context and the response
@@ -822,8 +834,6 @@ class BERTIRDataset(Dataset):
                 for idx, r in enumerate(response):
                     bundle = dict()
                     rid = self.vocab.encode(r)
-                    if len(rid) < tgt_min_length:
-                        continue
                     bundle['context_id'] = context_id + rid[1:]
                     bundle['label'] = 1 if idx == 0 else 0
                     self.data.append(bundle)

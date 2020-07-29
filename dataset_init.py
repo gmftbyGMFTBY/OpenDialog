@@ -123,7 +123,7 @@ def load_bert_ir_multi_dataset(args):
 def load_bert_ir_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:
-        data = BERTIRDataset(path, mode=args['mode'], samples=1)
+        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='coherence')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
     else:
         data = BERTIRDataset(path, mode=args['mode'], samples=9)
@@ -138,9 +138,10 @@ def load_bert_ir_multiview_dataset(args):
         path = f'data/{args["dataset"]}/{args["mode"]}.txt'
         if args['mode'] in ['train', 'dev']:
             data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect=aspect)
-            iter_ = DataLoader(data, shuffle=True, batch_size=arggs['batch_size'], collate_fn=bert_ir_train_collate_fn)
+            iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
         if not os.path.exists(data.pp_path):
             data.save_pickle()
+        print(f'[!] process the negative aspect {aspect} over')
     return iters
 
 def load_pone_dataset(args):
