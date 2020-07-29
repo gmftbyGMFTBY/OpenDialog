@@ -251,6 +251,7 @@ class ESChat:
         # 1. topic
         if topic:
             query = f"{self.topic_dict[topic]} [SEP] {query}"
+            query = f'{topic}; {query}'
         # else:
         #     words = []
         # 2. key word
@@ -260,12 +261,14 @@ class ESChat:
         #     words.append(query)
         # query = ' '.join(words)
         # 3. construc the dsl query
-        if topic:
-            query = f'{topic}; {query}'
+
+        # 'context': query is Q-Q matching
+        # 'response': query is Q-A matching, which seems better
         dsl = {
             'query': {
                 'match': {
-                    'context': query
+                    # 'context': query
+                    'response': query    # Q-A matching is better
                 }
             }
         }

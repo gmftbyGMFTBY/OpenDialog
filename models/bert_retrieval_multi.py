@@ -47,31 +47,40 @@ class BERTMULTIVIEW(nn.Module):
         output = self.model(input_ids=inpt, attention_mask=attn_mask)[0]    # [batch, seq, 768]
         output = torch.mean(output, dim=1)    # [batch, 768]
 
-        fluency_ = self.fluency_middle(output)    # [batch, 256]
-        fluency_rest = self.fluency_head(F.relu(fluency_))    # [batch, 2]
-        coherence_ = self.coherence_middle(output)    # [batch, 256]
-        coherence_rest = self.coherence_head(F.relu(coherence_))    # [batch, 2]
-        diversity_ = self.diversity_middle(output)    # [batch, 256]
-        diveristy_rest = self.diversity_head(F.relu(diversity_))    # [batch, 2]
-        naturalness_ = self.naturalness_middle(output)    # [batch, 256]
-        naturalness_rest = self.naturalness_head(F.relu(naturalness_))    # [batch, 2]
-        relatedness_ = self.relatedness_middle(output)    # [batch, 256]
-        relatedness_rest = self.relatedness_head(F.relu(relateddness_))    # [batch, 2]
         if aspect == 'coherence':
-            target = coherence_rest
+            coherence_ = self.coherence_middle(output)    # [batch, 256]
+            coherence_rest = self.coherence_head(F.relu(coherence_))    # [batch, 2]
+            return coherence_rest
         elif aspect == 'fluency':
-            target = fluency_rest
+            fluency_ = self.fluency_middle(output)    # [batch, 256]
+            fluency_rest = self.fluency_head(F.relu(fluency_))    # [batch, 2]
+            return fluency_rest
         elif aspect == 'diversity':
-            target = diversity_rest
+            diversity_ = self.diversity_middle(output)    # [batch, 256]
+            diversity_rest = self.diversity_head(F.relu(diversity_))    # [batch, 2]
+            return diversity_rest
         elif aspect == 'naturalness':
-            target = naturalness_rest 
+            naturalness_ = self.naturalness_middle(output)    # [batch, 256]
+            naturalness_rest = self.naturalness_head(F.relu(naturalness_))    # [batch, 2]
+            return naturalness_rest
         elif aspect == 'relatedness':
-            target = relatedness_rest
+            relatedness_ = self.relatedness_middle(output)    # [batch, 256]
+            relatedness_rest = self.relatedness_head(F.relu(relateddness_))    # [batch, 2]
+            return relatedness_rest
         elif aspect == 'overall':
-            target = [relatedness_rest, coherence_rest, fluency_rest, diversity_rest, naturalness_rest]
+            fluency_ = self.fluency_middle(output)    # [batch, 256]
+            fluency_rest = self.fluency_head(F.relu(fluency_))    # [batch, 2]
+            coherence_ = self.coherence_middle(output)    # [batch, 256]
+            coherence_rest = self.coherence_head(F.relu(coherence_))    # [batch, 2]
+            diversity_ = self.diversity_middle(output)    # [batch, 256]
+            diveristy_rest = self.diversity_head(F.relu(diversity_))    # [batch, 2]
+            naturalness_ = self.naturalness_middle(output)    # [batch, 256]
+            naturalness_rest = self.naturalness_head(F.relu(naturalness_))    # [batch, 2]
+            relatedness_ = self.relatedness_middle(output)    # [batch, 256]
+            relatedness_rest = self.relatedness_head(F.relu(relateddness_))    # [batch, 2]
+            return [fluency_rest, diversity_rest, coherence_rest, naturalness_rest, relatedness_rest]
         else:
             raise Exception(f'[!] target aspect {aspect} is unknown')
-        return target
 
 
 class BERTMULTIVIEWAgent(RetrievalBaseAgent):
@@ -105,42 +114,44 @@ class BERTMULTIVIEWAgent(RetrievalBaseAgent):
         self.criterion = nn.CrossEntropyLoss()
 
         self.show_parameters(self.args)
-
+        
     def train_model(self, train_iters, mode='train', recoder=None):
-        '''
-        :labels: [batch]; 0-Positive, 1-FluencyNegative, 2-CoherenceNegative, 3-DiversityNegative
-        train_iters contain four iterator (each for each aspect)
-        '''
         self.model.train()
         batch_num = 0
         order = ['diversity', 'fluency', 'coherence', 'naturalness', 'relatedness']
-        with tqdm(total=len(train_iters[0])*len(order)) as pbar:
-            stats = {i: {'correct': 0, 's': 0, 'total_loss': 0} for i in order}
-            for idx, batches in enumerate(zip(train_iters)):
-                for batch, aspect in zip(batches, order):
-                    cid, label = batch
-                    self.optimizer.zero_grad()
-                    output = self.model(cid, aspect=aspect)    # [batch, 2]
-                    loss = self.criterion(
-                            output, 
-                            label.view(-1))
-                    if mode == 'train':
-                        loss.backward()
-                        clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
-                        self.optimizer.step()
+        stats = {i: {'acc': 0, 'loss': 0} for i in order}
+        for aspect, iter_ in tqdm(zip(order, train_iters)):
+            print(f'[!] begin train the `{aspect}` negative aspect')
+            loss, acc = self.train_model_aspect(iter_, aspect=aspect)  
+            stats[aspect]['loss'] = loss
+            stats[aspect]['acc'] = acc
+        return round(np.mean([i['loss'] for i in stats]))
+
+    def train_model_aspect(self, train_iter, aspect='coherence'):
+        batch_num = 0
+        correct, s, total_loss = 0, 0, 0
+        pbar = tqdm(train_iter)
+        for batch in pbar:
+            cid, label = batch
+            self.optimizer.zero_grad()
+            output = self.model(cid, aspect=aspect)    # [batch, 2]
+            loss = self.criterion(
+                    output, 
+                    label.view(-1))
+            loss.backward()
+            clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+            self.optimizer.step()
                         
-                    stats[aspect]['total_loss'] += loss.item()
-                    now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]
-                    now_correct = torch.sum(now_correct == label).item()
-                    stats[aspect]['correct'] += now_correct
-                    stats[aspect]['s'] += len(label)
-                    
-                average_acc = np.mean([stats[i]['correct']/stats[i]['s'] for i in order])
-                average_loss = np.mean([stats[i]['total_loss']/batch_num for i in order])
-                pbar.set_description(f'[!] avg_loss: {round(average_loss, 4)}; avg_acc:{round(average_acc, 4)}')
-                pbar.update(len(label))
-                batch_num += 1
-        return round(average_loss)
+            total_loss += loss.item()
+            now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]
+            now_correct = torch.sum(now_correct == label).item()
+            correct += now_correct
+            s += len(label)
+            batch_num += 1
+            
+            pbar.set_description(f'[!] aspect: {aspect}; loss: {round(loss.item(), 4)}; acc(run|overall): {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
+        print(f'[!] overall acc: {round(correct/s, 4)}')
+        return round(total_loss / batch_num, 4), round(correct/s, 4)
     
     def talk(self, topic, msgs):
         with torch.no_grad():

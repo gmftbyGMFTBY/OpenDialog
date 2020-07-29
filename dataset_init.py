@@ -136,9 +136,14 @@ def load_bert_ir_multiview_dataset(args):
     iters = []
     for aspect in ['diversity', 'fluency', 'coherence', 'naturalness', 'relatedness']:
         path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+        if aspect == 'diversity':
+            samples = 1
+        else:
+            samples = 9
         if args['mode'] in ['train', 'dev']:
             data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect=aspect)
-            iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
+            iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
+            iters.append(iter_)
         if not os.path.exists(data.pp_path):
             data.save_pickle()
         print(f'[!] process the negative aspect {aspect} over')

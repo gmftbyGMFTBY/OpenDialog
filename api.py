@@ -133,7 +133,7 @@ def wechat_api():
         # msgs = sorted(msgs, key=lambda i:i[1])[-10:]
         data = {
             'group_id': 0,
-            'topic': topic,
+            'topic': None,
             'robot_id': 0,
             'msgs': [{'msg': content}]
         }
