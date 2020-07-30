@@ -134,14 +134,11 @@ def load_bert_ir_dataset(args):
 
 def load_bert_ir_multiview_dataset(args):
     iters = []
-    for aspect in ['diversity', 'fluency', 'coherence', 'naturalness', 'relatedness']:
+    for aspect in ['diversity', 'fluency', 'coherence', 'naturalness', 'relatedness', 'overall']:
         path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-        if aspect == 'diversity':
-            samples = 1
-        else:
-            samples = 9
+        samples = 1 if aspect in ['diversity', 'overall'] else 5
         if args['mode'] in ['train', 'dev']:
-            data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect=aspect)
+            data = BERTIRDataset(path, mode=args['mode'], samples=samples, negative_aspect=aspect)
             iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
             iters.append(iter_)
         if not os.path.exists(data.pp_path):

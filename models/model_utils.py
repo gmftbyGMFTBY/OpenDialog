@@ -252,16 +252,6 @@ class ESChat:
         if topic:
             query = f"{self.topic_dict[topic]} [SEP] {query}"
             query = f'{topic}; {query}'
-        # else:
-        #     words = []
-        # 2. key word
-        # words.extend(self.kwparser.parser(query, topic=topic))
-        # if len(words) <= 1:
-            # use the whole query
-        #     words.append(query)
-        # query = ' '.join(words)
-        # 3. construc the dsl query
-
         # 'context': query is Q-Q matching
         # 'response': query is Q-A matching, which seems better
         dsl = {

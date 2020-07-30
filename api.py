@@ -85,7 +85,7 @@ def wechat_api():
         my_nonce = request.args.get('nonce')
         my_echostr = request.args.get('echostr')
 
-        token = 'xxxxx'    # your token
+        token = 'gmftbyGMFTBY'    # your token
 
         data = [token, my_timestamp, my_nonce]
         data.sort()
@@ -138,7 +138,6 @@ def wechat_api():
             'msgs': [{'msg': content}]
         }
         reply = agent.get_res(data)
-        # reply = '兰天真帅'
         # insert the response into the mongodb
         data_ = {'response': reply, "id": db_table_counter(table)}
         x = table.insert_one(data_)

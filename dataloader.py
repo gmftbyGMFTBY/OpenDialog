@@ -726,6 +726,7 @@ class BERTIRDataset(Dataset):
         * the human annotation should be statistised to analyze whether the responses retrieved by the BM25 is the unnatural.
         * naturalness may need the label filter algorithm to ignore the noises
     5. relatedness
+    6. overall: coherence sampling with only 1 negative samples for training the aggration head
     '''
 
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
@@ -788,7 +789,7 @@ class BERTIRDataset(Dataset):
             eschator = ESChat('zh50w_database', kb=False)
             if negative_aspect == 'relatedness':
                 w2v = load_w2v('data/chinese_w2v')
-        elif negative_aspect == 'coherence':
+        elif negative_aspect in ['coherence', 'overall']:
             pass
         else:
             raise Exception(f'[!] got unknow negative aspect {negative_aspect}')
@@ -814,7 +815,7 @@ class BERTIRDataset(Dataset):
         else:
             for i in tqdm(data):
                 context, response = i[0], i[1]
-                if negative_aspect == 'coherence':
+                if negative_aspect in ['coherence', 'overall']:
                     negative = generate_negative_samples(response, responses, samples=samples)
                 elif negative_aspect == 'fluency':
                     negative = generate_negative_samples_fluency(response, samples=samples, vocab=vocabs)
