@@ -210,19 +210,6 @@ class ESUtils:
             })
         helpers.bulk(self.es, actions) 
         print(f'[!] retrieval database size: {self.es.count(index=self.index)["count"]}')
-        
-    def insert_pairs_(self, pairs):
-        count = self.es.count(index=self.index)['count']
-        actions = []
-        for i, qa in enumerate(tqdm(pairs)):
-            actions.append({
-                '_index': self.index,
-                '_id': i + count,
-                'context': qa,
-                'response': qa,
-            })
-        helpers.bulk(self.es, actions) 
-        print(f'[!] retrieval database size: {self.es.count(index=self.index)["count"]}')
 
 class ESChat:
 
@@ -281,10 +268,12 @@ class ESChat:
         return rest
 
     def multi_search(self, querys, samples=10):
+        # limit the querys length
+        querys = [i[-150:] for i in querys]
         search_arr = []
         for query in querys:
             search_arr.append({'index': self.index})
-            search_arr.append({'query': {'match': {'context': query}}, 'size': samples})
+            search_arr.append({'query': {'match': {'response': query}}, 'size': samples})
         request = ''
         for each in search_arr:
             request += f'{json.dumps(each)} \n'

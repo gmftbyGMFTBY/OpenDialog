@@ -74,7 +74,11 @@ def generate_negative_samples_naturalness(responses, pool_size=64, samples=10, l
     rest = bm25Model.multi_search(responses, samples=pool_size)
     rest_ = []    # [batch_size, 64]
     for i, r in zip(rest['responses'], responses):
-        p = [j['_source']['response'] for j in i['hits']['hits']]
+        try:
+            p = [j['_source']['response'] for j in i['hits']['hits']]
+        except:
+            ipdb.set_trace()
+        p = list(set(p))
         if r in p:
             p.remove(r)
         rest_.append(p[:samples])
@@ -88,6 +92,7 @@ def generate_negative_samples_relatedness(responses, samples=10, pool_size=64, w
     rest_ = []
     for i, r in zip(rest['responses'], responses):
         p = [j['_source']['response'] for j in i['hits']['hits']]
+        p = list(set(p))
         if r in p:
             p.remove(r)
         # embedding chosen

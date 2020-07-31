@@ -110,10 +110,10 @@ def collect_samples_qq_zh50w(index_name):
     tool = ESUtils(index_name, create_index=True)
     print(f'[!] {index_name} elasticsearch database created')
     def insert_data(pairs):
-        tool.insert_pairs_(pairs)
+        tool.insert_pairs(pairs)
         print(f'{tool.es.count(index=index_name)["count"]} utterances in database')
     i = 'zh50w'
-    insert_data(read_dataset_(i))
+    insert_data(filter_useless(make_pairs(read_dataset(i), qa=True)))
     print(f'[!] finish insert the {i} dataset')
 
 def collect_samples_qa(index_name):

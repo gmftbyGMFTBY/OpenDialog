@@ -37,21 +37,31 @@ OpenDialog核心文件和目录:
 1. 系统环境:
     * Linux/Ubuntu-16.04+
     * Python 3.6+
+    * GPU (default 1080 Ti)
 
-2. 根据`requirements.txt`安装环境依赖
+2. 根据`requirements.txt`安装python依赖库
 
 ```bash
 pip install -r requirements.txt
 ```
 
+3. 安装 `ElasticSearch`
+    基于检索的对话系统需要首先使用`elasticsearch`进行粗筛
+
+4. 安装 `mongodb`
+    启动服务之后，会使用`mongodb`存储会话历史和必要的数据
+
+
 ### 3. 准备数据
 
 百度云链接: https://pan.baidu.com/s/1qwUj6xevOIPr_7v7apwA0A; 提取码: 3erj
 
-### 4. 预处理数据
+将对应的数据文件存放在`data`目录下对应的子目录中，词向量文件`chinese_w2v.txt`和`english_w2v.bin`存放在`data`下即可。数据细节和预处理数据详见`data/README.md`。
 
 ### 5. 训练模型
 
 ### 6. 测试模型
 
-### 7. 启动接口，开始对话
+**并不是所有的模型都有测试阶段**
+
+### 7. 启动flask服务

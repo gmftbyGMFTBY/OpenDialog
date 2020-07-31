@@ -803,10 +803,10 @@ class BERTIRDataset(Dataset):
                     bsz_ = len(items)
                     contexts_, responses_ = [i[0] for i in items], [i[1] for i in items]
                     if negative_aspect == 'naturalness':
-                        negatives = generate_negative_samples_naturalness(responses_, samples=samples, bm25Model=eschator, pool_size=128)
+                        negatives = generate_negative_samples_naturalness(contexts_, samples=samples, bm25Model=eschator, pool_size=128)
                     elif negative_aspect == 'relatedness':
                         # or "Semantic relatedness"
-                        negatives = generate_negative_samples_relatedness(responses_, samples=samples, bm25Model=eschator, pool_size=64, w2v=w2v, embedding_function=convert_text_embedding)
+                        negatives = generate_negative_samples_relatedness(contexts_, samples=samples, bm25Model=eschator, pool_size=64, w2v=w2v, embedding_function=convert_text_embedding)
                     idx += bsz_
                     for c, r, n in zip(contexts_, responses_, negatives):
                         # ipdb.set_trace()

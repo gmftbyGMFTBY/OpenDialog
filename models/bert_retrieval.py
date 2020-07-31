@@ -45,12 +45,12 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
                 'samples': 10,
                 'multi_gpu': self.gpu_ids,
                 'talk_samples': 256,
-                'vocab_file': 'data/vocab/vocab_small',
+                'vocab_file': 'bert-base-chinese',
                 'pad': 0,
                 'model': 'bert-base-chinese',
         }
         # hyperparameters
-        self.vocab = BertTokenizer(vocab_file=self.args['vocab_file'])
+        self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         self.model = BERTRetrieval(self.args['model'])
         if torch.cuda.is_available():
             self.model.cuda()

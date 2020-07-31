@@ -29,40 +29,46 @@ class BERTMULTIVIEW(nn.Module):
         self.head = nn.Linear(256 * 5, 2)
 
     def forward(self, inpt, aspect='coherence'):
-        attn_mask = generate_attention_mask(inpt)
-        output = self.model(input_ids=inpt, attention_mask=attn_mask)[0]    # [batch, seq, 768]
-        output = torch.mean(output, dim=1)    # [batch, 768]
+        if aspect != 'overall':
+            with torch.no_grad():
+                attn_mask = generate_attention_mask(inpt)
+                output = self.model(input_ids=inpt, attention_mask=attn_mask)[0]
+                output = torch.mean(output, dim=1)    # [batch, 768]
+        else:
+            attn_mask = generate_attention_mask(inpt)
+            output = self.model(input_ids=inpt, attention_mask=attn_mask)[0]
+            output = torch.mean(output, dim=1)    # [batch, 768]
 
         if aspect == 'coherence':
-            coherence_m = F.relu(self.coherence_m(output))
+            coherence_m = F.tanh(self.coherence_m(output))
             coherence_rest = self.coherence_head(coherence_m)    # [batch, 2]
             return coherence_rest
         elif aspect == 'fluency':
-            fluency_m = F.relu(self.fluency_m(output))
+            fluency_m = F.tanh(self.fluency_m(output))
             fluency_rest = self.fluency_head(fluency_m)    # [batch, 2]
             return fluency_rest
         elif aspect == 'diversity':
-            diversity_m = F.relu(self.diversity_m(output))
+            diversity_m = F.tanh(self.diversity_m(output))
             diversity_rest = self.diversity_head(diversity_m)    # [batch, 2]
             return diversity_rest
         elif aspect == 'naturalness':
-            naturalness_m = F.relu(self.naturalness_m(output))
+            naturalness_m = F.tanh(self.naturalness_m(output))
             naturalness_rest = self.naturalness_head(naturalness_m)    # [batch, 2]
             return naturalness_rest
         elif aspect == 'relatedness':
-            relatedness_m = F.relu(self.relatedness_m(output))
+            relatedness_m = F.tanh(self.relatedness_m(output))
             relatedness_rest = self.relatedness_head(relatedness_m)    # [batch, 2]
             return relatedness_rest
         elif aspect == 'overall':
-            fluency_m = F.relu(self.fluency_m(output))
+            fluency_m = F.tanh(self.fluency_m(output))
             fluency_rest = self.fluency_head(fluency_m)    # [batch, 2]
-            coherence_m = F.relu(self.coherence_m(output))
+            coherence_m = F.tanh(self.coherence_m(output))
             coherence_rest = self.coherence_head(coherence_m)    # [batch, 2]
-            diversity_m = F.relu(self.diversity_m(output))
+            diversity_m = F.tanh(self.diversity_m(output))
             diversity_rest = self.diversity_head(diversity_m)    # [batch, 2]
-            naturalness_m = F.relu(self.naturalness_m(output))
+            naturalness_m = F.tanh(self.naturalness_m(output))
             naturalness_rest = self.naturalness_head(naturalness_m)    # [batch, 2]
-            relatedness_m = F.relu(self.relatedness_m(output))
+            relatedness_m = F.tanh(self.relatedness_m(output))
             relatedness_rest = self.relatedness_head(relatedness_m)    # [batch, 2]
             # detach the output from the graph, do not need back propagation, speed up
             output = torch.cat([fluency_m, coherence_m, diversity_m, naturalness_m, relatednsess_m], dim=1).detach()    # 5*[batch, 256] -> [batch, 256*5]
@@ -108,14 +114,12 @@ class BERTMULTIVIEWAgent(RetrievalBaseAgent):
     def train_model(self, train_iters, mode='train', recoder=None):
         self.model.train()
         # train the five heads
-        order = ['diversity', 'fluency', 'coherence', 'naturalness', 'relatedness']
-        stats = {i: {'acc': 0, 'loss': 0} for i in order}
+        order = ['coherence', 'fluency', 'diversity', 'naturalness', 'relatedness']
+        # stats = {i: {'acc': 0, 'loss': 0} for i in order}
         for aspect, iter_ in tqdm(zip(order, train_iters[:-1])):
             print(f'[!] begin train the `{aspect}` negative aspect')
-            loss, acc = self.train_model_aspect(iter_, aspect=aspect)  
-            stats[aspect]['loss'] = loss
-            stats[aspect]['acc'] = acc
-        print(f'[!] average loss: {round(np.mean([i["loss"] for i in stats]))}')
+            loss, acc = self.train_model_aspect(iter_, aspect=aspect)
+            print(f'{aspect} loss|acc: {loss}|{acc}')
         # train the aggregation
         loss, acc = self.train_model_aspect(train_iters[-1], aspect='overall')
         print(f'[!] the final loss and accuracy: {loss}; {acc}')
