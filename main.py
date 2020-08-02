@@ -99,7 +99,7 @@ def main(**args):
             # training and validation
             train_loss = agent.train_model(
                     train_iter, 
-                    mode='train',)
+                    mode='train')
             # write into the tensorboard
             sum_writer.add_scalar(f'{args["dataset"]}-Loss/train', train_loss, i)
             sum_writer.flush()

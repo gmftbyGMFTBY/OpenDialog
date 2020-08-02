@@ -716,7 +716,6 @@ class BERTIRDataset(Dataset):
     1. train and dev mode only need the binary classification
     2. test mode needs to consider about the measurement
     
-    
     Aspects:
     1. fluency
     2. coherence
@@ -726,7 +725,7 @@ class BERTIRDataset(Dataset):
         * the human annotation should be statistised to analyze whether the responses retrieved by the BM25 is the unnatural.
         * naturalness may need the label filter algorithm to ignore the noises
     5. relatedness
-    6. overall: coherence sampling with only 1 negative samples for training the aggration head
+    6. overall: coherence sampling with only 1 negative samples for training the aggration head. Overall may need the `naturalness` negative samples for training (harder negative samples is better).
     '''
 
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
