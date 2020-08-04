@@ -3,7 +3,7 @@
 # only backup the text file
 rm -rf backup
 mkdir -p backup
-folder=(zh50w zhihu MTDialogRewritten ECG zhidao kgdialog kdconv doubangroup xiaohuangji weibo400w ptt qingyun11w douban300w topic)
+folder=(zh50w zhihu MTDialogRewritten ECG zhidao kgdialog kdconv douban_group_convs doubangroup xiaohuangji weibo400w ptt qingyun11w douban300w topic)
 
 # bakcup the necessary word embedding files
 cp chinese_w2v.txt english_w2v.bin backup
@@ -59,6 +59,11 @@ do
         cp $path/train_.txt backup/$path
     elif [ $path = 'topic' ]; then
         cp $path/train.txt backup/$path
+    elif [ $path = 'douban_group_convs' ]; then
+        cp $path/train.txt backup/$path
+        cp $path/trees.json backup/$path
+        cp $path/tokens.json backup/$path
+        cp $path/corpus.jsonl backup/$path
     else
         echo "[!] got unknow dataset $path"
     fi

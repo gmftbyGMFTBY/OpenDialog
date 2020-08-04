@@ -730,7 +730,7 @@ class BERTIRDataset(Dataset):
 
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
                  turn_size=3, max_len=300, samples=9, vocab_file='data/vocab/vocab_small',
-                 negative_aspect='coherence'):
+                 negative_aspect='coherence', reduce=False, reduce_num=50000):
         self.mode = mode
         self.max_len = max_len 
         # data = read_csv_data(path)
@@ -793,6 +793,11 @@ class BERTIRDataset(Dataset):
         else:
             raise Exception(f'[!] got unknow negative aspect {negative_aspect}')
             
+        # reduce for fine tuning
+        if reduce:
+            random_idx = random.sample(range(len(data)), reduce_num)
+            data = [data[i] for i in random_idx]
+            
         if negative_aspect in ['naturalness', 'relatedness']:
             # too slow, use multisearch for speeding up
             with tqdm(total=len(data)) as pbar:
@@ -808,7 +813,6 @@ class BERTIRDataset(Dataset):
                         negatives = generate_negative_samples_relatedness(contexts_, samples=samples, bm25Model=eschator, pool_size=64, w2v=w2v, embedding_function=convert_text_embedding)
                     idx += bsz_
                     for c, r, n in zip(contexts_, responses_, negatives):
-                        # ipdb.set_trace()
                         d_.append((c, [r] + n))
                     pbar.update(bsz_)
         else:
@@ -868,6 +872,175 @@ class BERTIRDataset(Dataset):
         with open(self.pp_path, 'wb') as f:
             pickle.dump(self.data, f)
         print(f'[!] save dataset into {self.pp_path}')
+        
+class BERTIRCLDataset(Dataset):
+
+    '''
+    BERT IR Curriculum Learning Dataset
+    The negative samples maybe use the different negative sampling strategies to collect the different difficult samples.
+    '''
+
+    def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
+                 max_len=300, samples=9, vocab_file='data/vocab/vocab_small'):
+        self.mode = mode
+        self.max_len = max_len 
+        # data = read_csv_data(path)
+        data = read_text_data(path)
+        # context and response are all the negative samples 
+        responses = [i[1] for i in data]
+        # self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pp_path = f'{os.path.splitext(path)[0]}_cl.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data = []
+
+        # collect the data samples
+        d_ = []
+        for i in tqdm(data):
+            context, response = i[0], i[1]
+            negative = generate_negative_samples(response, responses, samples=samples)
+            d_.append((context, [response] + negative))
+        
+        if mode in ['train', 'dev']:
+            # concatenate the context and the response
+            for context, response in tqdm(d_):
+                context_id = self.vocab.encode(context)
+                if len(context_id) < src_min_length:
+                    continue
+                for idx, r in enumerate(response):
+                    bundle = dict()
+                    rid = self.vocab.encode(r)
+                    p = context_id + rid[1:]
+                    bundle['context_id'] = p[-self.max_len:]
+                    bundle['label'] = 1 if idx == 0 else 0
+                    self.data.append(bundle)
+            random.shuffle(self.data)
+        else:
+            for item in tqdm(d_):
+                context, response = item
+                context_id = self.vocab.encode(context)
+                res_ids = [self.vocab.encode(i) for i in response]
+                bundle = dict()
+                bundle['context_id'] = context_id
+                bundle['reply_id'] = res_ids
+                bundle['label'] = [1] + [0] * samples
+                self.data.append(bundle)
+                
+    def reset_order(self, losses):
+        index = np.argsort(losses)
+        self.data = [self.data[i] for i in index]
+        print(f'[!] reset the training order over according to the losses')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        if self.mode in ['train', 'dev']:
+            return bundle
+        else:
+            ids = []
+            for i in range(len(bundle['reply_id'])):
+                p = bundle['context_id'] + bundle['reply_id'][i][1:]
+                ids.append(torch.LongTensor(p[-self.max_len:]))
+            return ids, bundle['label']
+    
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+        
+class BERTIRCLDataLoader:
+    
+    def __init__(self, data, T, batch_size=16, window_ratio=0.05,
+                 forLoss=False):
+        self.data = data    # dataset object
+        self.data_size = len(data)
+        self.batch_size = batch_size
+        self.T = T
+        self.c0 = 0.01    # begin with training 1% samples
+        self.t = 0
+        self.forLoss = forLoss
+        self.index = 0
+        self.pad = 0
+        
+        self.priority = [10000.0] * self.data_size
+        self.last_index = None
+        
+    def reset_order(self, losses):
+        print(f'[!] reset the dataset order accorading to the loss')
+        self.data.reset_order(losses)
+        
+    def update_priority(self, losses):
+        assert len(last_index) == len(losses), f'[!] error during updating the losses'
+        for idx, l in zip(self.last_index, losses):
+            self.priority[idx] = l
+        
+    def progress(self):
+        '''
+        use self.t to obtain the available samples ratio
+        '''
+        s = np.sqrt(
+                 self.t * (1 - self.c0**2) / self.T + self.c0**2
+             )
+        s = int(s * self.data_size)
+        return s
+    
+    def normal(self, p):
+        s = np.array(self.priority[:p])
+        s = s / np.sum(s)
+        return s
+    
+    def __iter__(self):
+        return self
+    
+    def __len__(self):
+        return self.data_size
+    
+    def __next__(self):
+        if self.forLoss:
+            # extract the data samples one by one in order
+            if self.index >= self.data_size:
+                self.index = 0
+                raise StopIteration
+            else:
+                batch = self.data[self.index:self.index+self.batch_size]
+                ids = [torch.LongTensor(i['context_id']) for i in batch]
+                ids = pad_sequence(ids, batch_first=True, padding_value=self.pad)
+                labels = torch.LongTensor([i['label'] for i in batch])
+                if torch.cuda.is_available():
+                    ids = ids.cuda()
+                    labels = labels.cuda()
+                self.index += len(batch)
+                return ids, labels
+        else:
+            p = self.progress()
+            if p >= self.data_size:
+                self.t = 0
+                raise StopIteration
+            else:
+                # define the sample range
+                data = self.data[:p]
+                # uniform sample
+                # self.last_index = random.sample(range(len(data), self.batch_size))
+                # make sure the samples that are not trained will have the high priority to be trained, and focus on the hard sample in the `easy` curriculum learning duration.
+                self.last_index = np.random.choice(
+                    len(data), self.batch_size, self.normal(p)
+                )
+                batch = [data[i] for i in self.last_index]
+                # construct the tensor
+                ids = [torch.LongTensor(i['context_id']) for i in batch]
+                ids = pad_sequence(ids, batch_first=True, padding_value=self.pad)
+                labels = torch.LongTensor([i['label'] for i in batch])
+                if torch.cuda.is_available():
+                    ids = ids.cuda()
+                    labels = labels.cuda()
+                self.t += 1
+                return round(p/self.data_size, 4), ids, labels
 
 class IRDataset(Dataset):
 
@@ -1406,17 +1579,23 @@ if __name__ == "__main__":
     # train_data = MultiGPT2Dataset('./data/zh50w/train.csv', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=multigpt2_train_collate_fn)
     # ========== BERTIRDataset ========== #
-    train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='coherence')
-    train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_test_collate_fn)
+    # train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='coherence')
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_test_collate_fn)
+    # ========== BERTIRCLDataset ========== #
+    train_data = BERTIRCLDataset('data/zh50w/train.txt', mode='train', samples=1)
+    train_data.save_pickle()
+    train_iter = BERTIRCLDataLoader(train_data, int(len(train_data) * 5 / 10), 
+                                    batch_size=10)
+    train_iter.forLoss = True
     # ========== BERTIR ========== #
     # train_data = BERTNLIDataset('data/NLI/cnsd_snli_v1.0.train.jsonl', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=nli_collate_fn)
     
     # ========= ITERATE ========= # 
-    for batch in tqdm(train_iter):
-        ipdb.set_trace()
-    # ========== GPT2RL ITERATE ========== #
-    # with tqdm(total=len(train_iter)) as pbar:
-    #     for batch in train_iter:
-    #         ipdb.set_trace()
-    #         pbar.update(len(batch[0]))
+    # for batch in tqdm(train_iter):
+    #     ipdb.set_trace()
+    # ========== CUSTOM ITERATOR ========== #
+    with tqdm(total=len(train_iter)) as pbar:
+        for batch in train_iter:
+            ipdb.set_trace()
+            pbar.update(len(batch[0]))

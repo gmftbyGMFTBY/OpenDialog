@@ -18,6 +18,8 @@ def parser_args():
     parser.add_argument('--src_len_size', type=int, default=300)
     parser.add_argument('--tgt_len_size', type=int, default=50)
     parser.add_argument('--multi_gpu', type=str, default=None)
+    parser.add_argument('--curriculum', dest='curriculum', action='store_true')
+    parser.add_argument('--no-curriculum', dest='curriculum', action='store_false')
     return parser.parse_args()
 
 def load_dataset(args):
@@ -51,6 +53,8 @@ def load_dataset(args):
         return load_bert_ir_dataset(args)
     elif args['model'] == 'bertretrieval_multiview':
         return load_bert_ir_multiview_dataset(args)
+    elif args['model'] == 'bertretrieval_cl':
+        return load_bert_ir_cl_dataset(args)
     elif args['model'] == 'bertnli':
         return load_bert_nli_dataset(args)
     elif args['model'] == 'bertlogic':
@@ -81,6 +85,7 @@ def main(**args):
             'multigpt2': MultiGPT2Dataset,
             'bertretrieval': BERTRetrievalAgent,
             'bertretrieval_multiview': BERTMULTIVIEWAgent,
+            'bertretrieval_cl': BERTRetrievalCLAgent,
             'bertlogic': BERTRetrievalAgent,
             'bertnli': BERTNLIAgent,
             'gpt2gan': GPT2RLAgent,
@@ -91,32 +96,33 @@ def main(**args):
     agent = agent_map[args['model']](*parameter_map, **parameter_key)
 
     if args['mode'] == 'train':
-        # change the running version to dev
-        args['mode'] = 'dev'
-        # dev_iter = load_dataset(args)
-        # load dataset
-        for i in tqdm(range(args['epoch'])):
-            # training and validation
-            train_loss = agent.train_model(
-                    train_iter, 
-                    mode='train')
-            # write into the tensorboard
-            sum_writer.add_scalar(f'{args["dataset"]}-Loss/train', train_loss, i)
-            sum_writer.flush()
-            # with torch.no_grad():
-            #     dev_loss = agent.train_model(dev_iter, mode='dev')
-            agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
+        if args['curriculum']:
+            # 1. collect the loss for resetting the order (bertretrieval model)
+            train_iter.forLoss = True
+            agent_ = agent_map['bertretrieval'](*parameter_map, **parameter_key)
+            agent_.load_model(f'ckpt/{args["dataset"]}/bertretrieval/best.pt')
+            losses = agent_.predict(train_iter)
+            train_iter.reset_order(train_loss)
+            # 2. curriculum learning
+            train_iter.forLoss = False
+            agent.train_model(train_iter, mode='train')
+        else:
+            for i in tqdm(range(args['epoch'])):
+                train_loss = agent.train_model(
+                        train_iter, 
+                        mode='train')
+                sum_writer.add_scalar(f'{args["dataset"]}-Loss/train', train_loss, i)
+                sum_writer.flush()
+                # with torch.no_grad():
+                #     dev_loss = agent.train_model(dev_iter, mode='dev')
+                agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
+            sum_writer.close()
     else:
         # load best model
         test_iter = load_dataset(args)
-        # agent.load_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
-        # NOTE
-        agent.load_model(f'ckpt/train_generative/gpt2/best.pt')
+        agent.load_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
         rest_path = f'rest/{args["dataset"]}/{args["model"]}/rest.txt'
-        test_loss = agent.test_model_samples(test_iter, rest_path)    # NOTE
-
-    if args['mode'] == 'train':
-        sum_writer.close()
+        test_loss = agent.test_model(test_iter, rest_path)
 
 if __name__ == "__main__":
     args = parser_args()

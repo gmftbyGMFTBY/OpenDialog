@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import BertTokenizer
 from models.bert_retrieval import BERTRetrieval
-from models.bert_nli import BERTNLI
+from models.bert_retrieval_multi import BERTMULTIVIEW
 from models.gpt2 import GPT2
 from models.base import RetrievalBaseAgent, BaseAgent
 import fasttext.FastText as ff

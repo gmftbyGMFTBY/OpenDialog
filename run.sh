@@ -10,7 +10,7 @@ model=$3
 cuda=$4 
 
 if [ $mode = 'init' ]; then
-    models=(pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 bertretrieval_multiview bertretrieval bertlogic gpt2gan gpt2lm)
+    models=(pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 bertretrieval_multiview bertretrieval_cl bertretrieval bertlogic gpt2gan gpt2lm)
     datasets=(douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
     mkdir bak ckpt rest
     for m in ${models[@]}
@@ -41,19 +41,9 @@ elif [ $mode = 'irdata' ]; then
         --dataset $dataset \
         --mode irdata \
         --batch_size 512
-elif [ $mode = 'hash_pg' ]; then
-    # this is just an example (discard), run the `run_hash.py`
-    echo "[!] begin to generate the hash positive contexts"
-    CUDA_VISIBLE_DEVICES=$cuda python -m utils.hash_positive_generate \
-        --gpu_id $cuda \
-        --dataset $dataset \
-        --model $model \
-        --output data/$dataset/hash \
-        --workers 12 \
-        --current_worker 3    # change this parameter from 0~$workers
 elif [ $mode = 'train' ]; then
     ./run.sh backup $dataset $model
-    rm ckpt/$dataset/$model/*
+    # rm ckpt/$dataset/$model/*
     rm rest/$dataset/$model/*    # clear the tensorboard cache
 
     english_datasets=(mutual dstc7 empchat dailydialog personachat cornell)
@@ -67,9 +57,9 @@ elif [ $mode = 'train' ]; then
         --dataset $dataset \
         --model $model \
         --mode train \
-        --batch_size 32 \
+        --batch_size 16 \
         --n_vocab 70000 \
-        --epoch 1 \
+        --epoch 5 \
         --seed 30 \
         --src_len_size 512 \
         --tgt_len_size 20 \

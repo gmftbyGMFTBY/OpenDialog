@@ -1,4 +1,4 @@
-from .header import *
+from header import *    # from .header import * will raise error
 from .coherence import *
 from .logic import *
 from .fluency import *
@@ -6,6 +6,7 @@ from .topic import *
 from .nli import *
 from .diversity import *
 from .mmi import *
+from .bert_multiview import *
 
 class MultiView(nn.Module):
     
@@ -30,9 +31,10 @@ class MultiView(nn.Module):
                  repetition_penalty=False, distinct=False, 
                  mmi=False, coherence_path=None, nli_path=None, 
                  logic_path=None, topic_path=None, mmi_path=None,
-                 fluency_path=None):
+                 fluency_path=None, bertmultiview=None, bertmultiview_path=None):
         super(MultiView, self).__init__()
         self.mode = {
+                'bertmultiview': bertmultiview,
                 'coherence': coherence,
                 'logic': logic,
                 'topic': topic,
@@ -45,6 +47,7 @@ class MultiView(nn.Module):
                 'repetition_penalty': repetition_penalty,
         }
         self.mode_weight = {
+                'bertmultiview': 1,
                 'coherence': 1,
                 'topic': 1.2,
                 'fluency': 0.5,
@@ -60,7 +63,8 @@ class MultiView(nn.Module):
         if (topic and not topic_path) or \
                 (coherence and not coherence_path) or \
                 (fluency and not fluency_path) or \
-                (logic and not logic_path):
+                (logic and not logic_path) or \
+                (bertmultiview and not bertmultiview_path):
             raise Exception(f'[!] essential path is not found')
         for k, v in self.mode.items():
             if not v:
@@ -92,6 +96,9 @@ class MultiView(nn.Module):
                     # safety need two models (gpt2, mmi gpt2)
                     self.model['fluency'] = SAFETY_FLUENCY()
                     self.model['fluency'].load_model(fluency_path)
+                elif k == 'bertmultiview':
+                    self.model['bertmultiview'] = BERT_MULTIVIEW()
+                    self.model['bertmultiview'].load_model(bertmultiview_path)
         print(f'[!] init the multview module over, available models are shown as follows:')
         # show the available models
         for k, v in self.mode.items():
@@ -119,7 +126,7 @@ class MultiView(nn.Module):
                 return False
 
     @torch.no_grad()
-    def forward(self, context, response, topic=None, history=None):
+    def forward(self, context, response, topic=None, history=None, bertmultiview_details=False):
         '''
         context: the string of the conversation context
         response: the string of the responses
@@ -153,32 +160,36 @@ class MultiView(nn.Module):
                 scores[k] = self.model[k].scores(response)
             elif k in ['distinct']:
                 scores[k] = self.model[k].scores(response, history)
+            elif k in ['bertmultiview']:
+                scores[k] = self.model[k].scores(context, response, details=bertmultiview_details)    # [list]
             else:
                 scores[k] = self.model[k].scores(context, response)    # [list]
         average_scores = []    # [batch]
         batch_size = len(context)
-        # for idx in range(batch_size):
-        #     average_scores.append(np.mean([i[idx] for i in scores.values()]))
-        for idx in range(batch_size):
-            average_scores.append(np.sum([v[idx] * self.mode_weight[key] for key, v in scores.items()]))
-        return average_scores, scores
+        if bertmultiview_details:
+            return None, scores
+        else:
+            for idx in range(batch_size):
+                average_scores.append(np.sum([v[idx] * self.mode_weight[key] for key, v in scores.items()]))
+            return average_scores, scores
 
 if __name__ == "__main__":
     model = MultiView(
-                topic=True,
+                topic=False,
                 coherence=True,
-                length=True,
-                nidf_tf=True,
-                fluency=True,
-                repetition_penalty=True,
-                mmi=True,
-                distinct=True,
+                length=False,
+                nidf_tf=False,
+                fluency=False,
+                repetition_penalty=False,
+                mmi=False,
+                distinct=False,
+                bertmultiview=True,
+                bertmultiview_path='ckpt/zh50w/bertretrieval_multiview/best.pt',
                 mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
-                coherence_path='ckpt/train_retrieval/bertretrieval/best.pt',
+                coherence_path='ckpt/zh50w/bertretrieval/best.pt',
                 topic_path='ckpt/fasttext/model.bin',
                 fluency_path='ckpt/LM/gpt2lm/best.pt',)
 
-    # safety, normal, fluency, coherence, nli, topic
     responses = [
             '哈哈哈',
             '我比较喜欢泰坦尼克号这种类型的',
@@ -194,13 +205,13 @@ if __name__ == "__main__":
             '我不想知道你喜不喜欢电影', 
             '中国足球必胜',
             '我了解电影',
-            '我看电影呢',
+            '我不喜欢我不喜欢电影',
             '我' * 500,
             ]
     # test the performance of the multiview metric
-    contexts = ['你喜欢什么电影呢 [SEP] 我还是挺喜欢恐怖电影的 [SEP] 那你觉得据情类的电影如何呢'] * len(responses)
+    contexts = ['你喜欢什么类型的电影呢'] * len(responses)
     topic = ['movie'] * len(responses) 
     history = ['来分享你最近看过的电影吧', '我最近看了一部恐怖片', '你难道喜欢看恐怖片么']
 
-    rest = model(contexts, responses, topic=topic, history=history)
+    rest = model(contexts, responses, topic=topic, history=history, bertmultiview_details=False)
     pprint.pprint(rest)
