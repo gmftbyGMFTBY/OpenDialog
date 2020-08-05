@@ -99,10 +99,17 @@ def main(**args):
         if args['curriculum']:
             # 1. collect the loss for resetting the order (bertretrieval model)
             train_iter.forLoss = True
-            agent_ = agent_map['bertretrieval'](*parameter_map, **parameter_key)
-            agent_.load_model(f'ckpt/{args["dataset"]}/bertretrieval/best.pt')
-            losses = agent_.predict(train_iter)
-            train_iter.reset_order(train_loss)
+            loss_path = f'rest/{args["dataset"]}/{args["model"]}/loss.pkl'
+            if os.path.exists(loss_path):
+                with open(loss_path, 'rb') as f:
+                    print(f'[!] load the losses priority from {loss_path}')
+                    losses = pickle.load(f)
+            else:
+                agent_ = agent_map['bertretrieval'](*parameter_map, **parameter_key)
+                agent_.load_model(f'ckpt/{args["dataset"]}/bertretrieval/best.pt')
+                losses = agent_.predict(train_iter, loss_path)
+                del agent_    # delete the agent_, which is already useless
+            train_iter.reset_order(losses)
             # 2. curriculum learning
             train_iter.forLoss = False
             agent.train_model(train_iter, mode='train')

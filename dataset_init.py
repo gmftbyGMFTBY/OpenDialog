@@ -126,7 +126,7 @@ def load_bert_ir_cl_dataset(args):
     if args['mode'] in ['train', 'dev']:
         data = BERTIRCLDataset(path, mode=args['mode'], samples=1)
         T = int(len(data) * args['epoch'] / args['batch_size']) + 1
-        iter_ = BERTIRCLDataLoader(data, T, shuffle=True, batch_size=args['batch_size'])
+        iter_ = BERTIRCLDataLoader(data, T, batch_size=args['batch_size'])
     else:
         data = BERTIRCLDataset(path, mode=args['mode'], samples=9)
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)

@@ -909,8 +909,6 @@ class BERTIRCLDataset(Dataset):
             # concatenate the context and the response
             for context, response in tqdm(d_):
                 context_id = self.vocab.encode(context)
-                if len(context_id) < src_min_length:
-                    continue
                 for idx, r in enumerate(response):
                     bundle = dict()
                     rid = self.vocab.encode(r)
@@ -918,7 +916,8 @@ class BERTIRCLDataset(Dataset):
                     bundle['context_id'] = p[-self.max_len:]
                     bundle['label'] = 1 if idx == 0 else 0
                     self.data.append(bundle)
-            random.shuffle(self.data)
+            # speed up the predict procedure
+            self.data = sorted(self.data, key=lambda i:len(i['context_id']))
         else:
             for item in tqdm(d_):
                 context, response = item
@@ -931,7 +930,20 @@ class BERTIRCLDataset(Dataset):
                 self.data.append(bundle)
                 
     def reset_order(self, losses):
-        index = np.argsort(losses)
+        '''
+        separate the right and the wrong labels
+        '''
+        rtrue = [idx for idx, i in enumerate(self.data) if i['label'] == 1]
+        rfalse = [idx for idx, i in enumerate(self.data) if i['label'] == 0]
+        true_losses = [losses[i] for i in rtrue]
+        false_losses = [losses[i] for i in rfalse]
+        true_index = np.argsort(true_losses)
+        true_index = [rtrue[i] for i in true_index]
+        false_index = np.argsort(false_losses)
+        false_index = [rfalse[i] for i in false_index]
+        index = []
+        for t, f in zip(true_index, false_index):
+            index.extend([t, f])
         self.data = [self.data[i] for i in index]
         print(f'[!] reset the training order over according to the losses')
 
@@ -961,6 +973,8 @@ class BERTIRCLDataLoader:
         self.data = data    # dataset object
         self.data_size = len(data)
         self.batch_size = batch_size
+        self.Lbatch_size = batch_size
+        print(f'[!] bsz(cl|predict): {self.batch_size}|{self.Lbatch_size}')
         self.T = T
         self.c0 = 0.01    # begin with training 1% samples
         self.t = 0
@@ -972,11 +986,10 @@ class BERTIRCLDataLoader:
         self.last_index = None
         
     def reset_order(self, losses):
-        print(f'[!] reset the dataset order accorading to the loss')
         self.data.reset_order(losses)
         
     def update_priority(self, losses):
-        assert len(last_index) == len(losses), f'[!] error during updating the losses'
+        assert len(self.last_index) == len(losses), f'[!] error during updating the losses'
         for idx, l in zip(self.last_index, losses):
             self.priority[idx] = l
         
@@ -985,9 +998,8 @@ class BERTIRCLDataLoader:
         use self.t to obtain the available samples ratio
         '''
         s = np.sqrt(
-                 self.t * (1 - self.c0**2) / self.T + self.c0**2
-             )
-        s = int(s * self.data_size)
+            self.t * (1 - self.c0**2) / self.T + self.c0**2
+        )
         return s
     
     def normal(self, p):
@@ -999,7 +1011,10 @@ class BERTIRCLDataLoader:
         return self
     
     def __len__(self):
-        return self.data_size
+        if self.forLoss:
+            return self.data_size
+        else:
+            return self.T
     
     def __next__(self):
         if self.forLoss:
@@ -1008,7 +1023,7 @@ class BERTIRCLDataLoader:
                 self.index = 0
                 raise StopIteration
             else:
-                batch = self.data[self.index:self.index+self.batch_size]
+                batch = self.data[self.index:self.index+self.Lbatch_size]
                 ids = [torch.LongTensor(i['context_id']) for i in batch]
                 ids = pad_sequence(ids, batch_first=True, padding_value=self.pad)
                 labels = torch.LongTensor([i['label'] for i in batch])
@@ -1018,7 +1033,8 @@ class BERTIRCLDataLoader:
                 self.index += len(batch)
                 return ids, labels
         else:
-            p = self.progress()
+            p_ = self.progress()
+            p = int(p_ * self.data_size)
             if p >= self.data_size:
                 self.t = 0
                 raise StopIteration
@@ -1029,7 +1045,7 @@ class BERTIRCLDataLoader:
                 # self.last_index = random.sample(range(len(data), self.batch_size))
                 # make sure the samples that are not trained will have the high priority to be trained, and focus on the hard sample in the `easy` curriculum learning duration.
                 self.last_index = np.random.choice(
-                    len(data), self.batch_size, self.normal(p)
+                    len(data), self.batch_size, p=self.normal(p), replace=False,
                 )
                 batch = [data[i] for i in self.last_index]
                 # construct the tensor
@@ -1040,7 +1056,7 @@ class BERTIRCLDataLoader:
                     ids = ids.cuda()
                     labels = labels.cuda()
                 self.t += 1
-                return round(p/self.data_size, 4), ids, labels
+                return round(p_, 4), ids, labels
 
 class IRDataset(Dataset):
 

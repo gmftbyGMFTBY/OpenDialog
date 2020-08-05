@@ -43,8 +43,8 @@ elif [ $mode = 'irdata' ]; then
         --batch_size 512
 elif [ $mode = 'train' ]; then
     ./run.sh backup $dataset $model
-    # rm ckpt/$dataset/$model/*
-    rm rest/$dataset/$model/*    # clear the tensorboard cache
+    rm ckpt/$dataset/$model/*
+    rm rest/$dataset/$model/events*    # clear the tensorboard cache
 
     english_datasets=(mutual dstc7 empchat dailydialog personachat cornell)
     if [[ ${english_datasets[@]} =~ $dataset ]]; then

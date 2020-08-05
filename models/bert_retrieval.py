@@ -60,18 +60,17 @@ class BERTRetrievalCLAgent(RetrievalBaseAgent):
         self.model.train()
         total_loss, batch_num = 0, 0
         correct, s = 0, 0
-        loss_container = []
-        with tqdm(total=len(train_iter)) as pbar:
-            for idx, batch in train_iter:
+        length = len(train_iter)
+        data_size = train_iter.data_size
+        with tqdm(total=length) as pbar:
+            for batch in train_iter:
                 p, cid, label = batch
                 self.optimizer.zero_grad()
                 output = self.model(cid)    # [batch, 2]
                 losses = self.criterion(
                           output, 
                           label.view(-1))
-                # 
                 train_iter.update_priority(losses.cpu().tolist())
-                loss_container.extend(losses.cpu().tolist())
                 loss = losses.mean()
                 
                 loss.backward()
@@ -86,10 +85,10 @@ class BERTRetrievalCLAgent(RetrievalBaseAgent):
                 correct += now_correct
                 s += len(label)
 
-                pbar.set_description(f'[!] progress: {p}|1.0; train loss: {round(loss.item(), 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
-                pbar.update(len(batch))
+                pbar.set_description(f'[!] progress: {p}|1.0; available samples: {int(p*data_size)}|{data_size}; train loss: {round(loss.item(), 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
+                pbar.update(1)
         print(f'[!] overall acc: {round(correct/s, 4)}')
-        return loss_container
+        return round(total_loss / batch_num, 4)
 
     def test_model(self, test_iter, path):
         self.model.eval()
@@ -208,23 +207,28 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         return round(total_loss / batch_num, 4)
     
     @torch.no_grad()
-    def predict(self, train_iter):
+    def predict(self, train_iter, path):
         '''
         Curriculum learning: 
             predict and collect the loss for each sample in the train_iter
         '''
+        print(f'[!] begin to generate the loss priority for curriculum learning')
         self.model.eval()
         loss_container = []
         with tqdm(total=len(train_iter)) as pbar:
-            for idx, batch in train_iter:
+            for batch in train_iter:
                 cid, label = batch
                 output = self.model(cid)    # [batch, 2]
                 losses = self.criterion_(
-                          output, 
-                          label.view(-1))
+                    output, 
+                    label.view(-1)
+                )
                 loss_container.extend(losses.cpu().tolist())
-                pbar.update(len(batch))
+                pbar.update(len(cid))
                 pbar.set_description(f'[!] collect loss for curriculum learning')
+        with open(path, 'wb') as f:
+            pickle.dump(loss_container, f)
+        print(f'[!] collect and save the loss into {path}')
         return loss_container
 
     def test_model(self, test_iter, path):

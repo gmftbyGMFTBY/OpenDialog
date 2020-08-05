@@ -29,9 +29,15 @@ class BERTMULTIVIEW(nn.Module):
         self.head = nn.Linear(256, 2)
 
     def forward(self, inpt, aspect='coherence'):
-        attn_mask = generate_attention_mask(inpt)
-        output = self.model(input_ids=inpt, attention_mask=attn_mask)[0]
-        output = torch.mean(output, dim=1)    # [batch, 768]
+        if aspect != 'overall':
+            with torch.no_grad():
+                attn_mask = generate_attention_mask(inpt)
+                output = self.model(input_ids=inpt, attention_mask=attn_mask)[0]
+                output = torch.mean(output, dim=1)    # [batch, 768]
+        else:
+            attn_mask = generate_attention_mask(inpt)
+            output = self.model(input_ids=inpt, attention_mask=attn_mask)[0]
+            output = torch.mean(output, dim=1)    # [batch, 768]
 
         if aspect == 'coherence':
             coherence_m = torch.tanh(self.coherence_m(output))
@@ -64,19 +70,6 @@ class BERTMULTIVIEW(nn.Module):
             ).mean(dim=0)    # 5*[batch, 256] -> [5, batch, 256] -> [batch, 256]
             output = self.head(output)    # [batch, 2]
             return output
-        elif aspect == 'null':
-            # predict mode
-            fluency_m = torch.tanh(self.fluency_m(output))
-            fluency_rest = self.fluency_head(fluency_m)
-            coherence_m = torch.tanh(self.coherence_m(output))
-            coherence_rest = self.coherence_head(coherence_m)
-            diversity_m = torch.tanh(self.diversity_m(output))
-            diversity_rest = self.diversity_head(diversity_m)
-            naturalness_m = torch.tanh(self.naturalness_m(output))
-            naturalness_rest = self.naturalness_head(naturalness_m)
-            relatedness_m = torch.tanh(self.relatedness_m(output))
-            relatedness_rest = self.relatedness_head(relatedness_m)
-            return fluency_rest, coherence_rest, diversity_rest, naturalness_rest, relatedness_rest
         else:
             raise Exception(f'[!] target aspect {aspect} is unknown')
 
@@ -100,9 +93,7 @@ class BERTMULTIVIEWAgent(RetrievalBaseAgent):
                 'talk_samples': 256,
                 'multi_gpu': self.gpu_ids,
                 'grad_clip': 3.0,
-                'samples': 10,
-                'warmup': 5,
-                'fine_tuning_step': 2,
+                'samples': 10
         }
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
         self.model = BERTMULTIVIEW()
@@ -117,29 +108,13 @@ class BERTMULTIVIEWAgent(RetrievalBaseAgent):
         self.show_parameters(self.args)
         
     def train_model(self, train_iters, mode='train', recoder=None):
-        '''
-        Stage 1: warmup 
-        Stage 2: fine tuning 5 aspect heads
-        '''
         self.model.train()
-        # stage 1: warm up
-        print(f'[!] begin to warm up the BERT model')
-        pbar = tqdm(range(self.args['warmup']))
-        for i in pbar:
-            loss, acc = self.train_model_aspect(train_iters[-1], aspect='overall')
-            pbar.set_description(f'[!] warmup epoch {i+1}|{self.args["warmup"]} finish')
-            
-        # stage 2: fine tuning aspect heads
-        print(f'[!] begin to fine tuning the aspect heads')
-        pbar = tqdm(range(self.args['fine_tuning_step']))
-        for i in pbar:
-            order = ['coherence', 'fluency', 'diversity', 'naturalness', 'relatedness']
-            for aspect, iter_ in tqdm(zip(order, train_iters[:-1])):
-                print(f'[!] begin train the `{aspect}` negative aspect')
-                loss, acc = self.train_model_aspect(iter_, aspect=aspect)
-            pbar.set_description(f'[!] fine tuning stage epoch {i+1}|{self.args["fine_tuning_step"]}')
-        # return useless value for compatiblilty
-        return 1.0
+        order = ['coherence', 'fluency', 'diversity', 'naturalness', 'relatedness']
+        for aspect, iter_ in tqdm(zip(order, train_iters[:-1])):
+            print(f'[!] begin train the `{aspect}` negative aspect')
+            loss, acc = self.train_model_aspect(iter_, aspect=aspect)
+        loss, acc = self.train_model_aspect(train_iters[-1], aspect='overall')
+        return loss
 
     def train_model_aspect(self, train_iter, aspect='coherence'):
         batch_num = 0
@@ -208,14 +183,14 @@ class BERTMULTIVIEWAgent(RetrievalBaseAgent):
         return output
     
     @torch.no_grad()
-    def test_model(self, test_iter, path, s=9):
+    def test_model(self, test_iter, path, s=5):
         self.model.eval()
         pbar = tqdm(test_iter)
         rest = []
         with torch.no_grad():
             for idx, batch in enumerate(pbar):
                 cid, label = batch
-                outputs = self.model(cid, aspect='null')
+                outputs = self.model(cid, aspect='overall')
                 
                 outputs = [F.softmax(output, dim=-1)[:, 1] for output in outputs]
                 output = self.aggregation_strategy(outputs, s=s)
@@ -234,7 +209,7 @@ class BERTMULTIVIEWAgent(RetrievalBaseAgent):
             # retrieval and process
             utterances_, ids = self.process_utterances(topic, msgs)
             # rerank, ids: [batch, seq]
-            outputs = self.model(ids, aspect='null')    # 5*[batch, 2]
+            outputs = self.model(ids, aspect='overall')    # 5*[batch, 2]
             outputs = [F.softmax(output, dim=-1)[:, 1] for output in outputs]    # 5*[batch]
             # combine these scores
             output = self.aggregation_strategy(outputs, s=s)
