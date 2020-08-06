@@ -63,8 +63,9 @@ class BERTRetrievalCLAgent(RetrievalBaseAgent):
         length = len(train_iter)
         data_size = train_iter.data_size
         with tqdm(total=length) as pbar:
-            for batch in train_iter:
-                p, cid, label = batch
+            for idx, batch in enumerate(train_iter):
+                p, left, delta_, cid, label = batch
+                
                 self.optimizer.zero_grad()
                 output = self.model(cid)    # [batch, 2]
                 losses = self.criterion(
@@ -84,8 +85,18 @@ class BERTRetrievalCLAgent(RetrievalBaseAgent):
                 now_correct = torch.sum(now_correct == label).item()
                 correct += now_correct
                 s += len(label)
+                
+                # recoder
+                recoder.add_scalar('train/Loss', loss.item(), idx)
+                recoder.add_scalar('train/RunAcc', now_correct/len(label), idx)
+                recoder.add_scalar('train/WholeAcc', correct/s, idx)
+                recoder.add_scalar('train/Progress', p, idx)
+                recoder.add_scalar('train/LeftSamples', left, idx)
+                recoder.add_scalar('train/AddedSamples', delta_, idx)
+                recoder.add_scalar('train/AvailableSamples', int(p*data_size), idx)
+                recoder.flush()
 
-                pbar.set_description(f'[!] progress: {p}|1.0; available samples: {int(p*data_size)}|{data_size}; train loss: {round(loss.item(), 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
+                pbar.set_description(f'[!] progress: {p}|1.0; samples(delta|left|available|whole): {delta_}|{left}|{int(p*data_size)}|{data_size}; loss: {round(loss.item(), 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
                 pbar.update(1)
         print(f'[!] overall acc: {round(correct/s, 4)}')
         return round(total_loss / batch_num, 4)

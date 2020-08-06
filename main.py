@@ -112,7 +112,8 @@ def main(**args):
             train_iter.reset_order(losses)
             # 2. curriculum learning
             train_iter.forLoss = False
-            agent.train_model(train_iter, mode='train')
+            agent.train_model(train_iter, mode='train', recoder=sum_writer)
+            agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
         else:
             for i in tqdm(range(args['epoch'])):
                 train_loss = agent.train_model(
@@ -123,7 +124,7 @@ def main(**args):
                 # with torch.no_grad():
                 #     dev_loss = agent.train_model(dev_iter, mode='dev')
                 agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
-            sum_writer.close()
+        sum_writer.close()
     else:
         # load best model
         test_iter = load_dataset(args)

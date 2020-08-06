@@ -833,8 +833,6 @@ class BERTIRDataset(Dataset):
             # concatenate the context and the response
             for context, response in tqdm(d_):
                 context_id = self.vocab.encode(context)
-                if len(context_id) < src_min_length:
-                    continue
                 for idx, r in enumerate(response):
                     bundle = dict()
                     rid = self.vocab.encode(r)
@@ -981,6 +979,8 @@ class BERTIRCLDataLoader:
         self.forLoss = forLoss
         self.index = 0
         self.pad = 0
+        self.pool_size = 1024
+        self.last_p = 0
         
         self.priority = [10000.0] * self.data_size
         self.last_index = None
@@ -1002,8 +1002,8 @@ class BERTIRCLDataLoader:
         )
         return s
     
-    def normal(self, p):
-        s = np.array(self.priority[:p])
+    def normal(self, x):
+        s = np.array(x)
         s = s / np.sum(s)
         return s
     
@@ -1035,18 +1035,33 @@ class BERTIRCLDataLoader:
         else:
             p_ = self.progress()
             p = int(p_ * self.data_size)
+            delta_ = p - self.last_p
+            self.last_p = p
             if p >= self.data_size:
                 self.t = 0
+                self.last_p = 0
                 raise StopIteration
             else:
                 # define the sample range
                 data = self.data[:p]
-                # uniform sample
-                # self.last_index = random.sample(range(len(data), self.batch_size))
+                
+                # ========== uniform sample ==========
+                self.last_index = random.sample(range(len(data)), self.batch_size)
+                # ========== priority sample (very slow) ==========
                 # make sure the samples that are not trained will have the high priority to be trained, and focus on the hard sample in the `easy` curriculum learning duration.
+                # self.last_index = np.random.choice(
+                #     len(data), self.batch_size, p=self.normal(p), replace=False,
+                # )
+                # ========== priority sample with pool size (not so slow but also priority) ==========
+                pool_index = random.sample(range(len(data)), self.pool_size)
+                probability = [self.priority[i] for i in pool_index]
                 self.last_index = np.random.choice(
-                    len(data), self.batch_size, p=self.normal(p), replace=False,
+                    pool_index, 
+                    self.batch_size, 
+                    p=self.normal(probability), 
+                    replace=False,
                 )
+                
                 batch = [data[i] for i in self.last_index]
                 # construct the tensor
                 ids = [torch.LongTensor(i['context_id']) for i in batch]
@@ -1056,7 +1071,7 @@ class BERTIRCLDataLoader:
                     ids = ids.cuda()
                     labels = labels.cuda()
                 self.t += 1
-                return round(p_, 4), ids, labels
+                return round(p_, 4), self.priority[:p].count(10000.0), delta_, ids, labels
 
 class IRDataset(Dataset):
 
