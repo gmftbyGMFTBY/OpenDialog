@@ -77,68 +77,56 @@ class Seq2Seq(nn.Module):
 
             return final_opt    # [max_len, batch]
 
-class Seq2SeqAgent:
+class Seq2SeqAgent(BaseAgent):
 
     def __init__(self, vocab_size, vocab):
+        super(Seq2SeqAgent, self).__init__()
+        try:
+            # self.gpu_ids = [int(i) for i in multi_gpu.split(',')]
+            self.gpu_ids = list(range(len(multi_gpu.split(','))))
+        except:
+            raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
+        assert run_mode in ['train', 'test', 'rerank', 'rerank_ir'], f'[!] running mode must be train or test, but got {run_mode}'
         # hyperparameters
-        self.hidden_size = 512
-        self.vocab_size = vocab_size
-        self.embed_size = 300
-        self.dropout = 0.5
-        self.bidirectional = True
-        self.n_layers = 2
-        self.grad_clip = 3.0
-        self.lr = 1e-4
-        self.pad = 0
-        self.tgt_len_size = 50    # max
-        self.lr_gamma = 0.5
-        self.patience = 5
-        self.min_lr = 1e-5
-        # hyperparamters
-
+        self.args= {
+            'hidden_size': 512,
+            'vocab_file': 'bert-base-chinese',
+            'embed_size': 300,
+            'dropout': 0.5,
+            'bidirectional': True,
+            'n_layers': 2,
+            'grad_clip': 3.0,
+            'lr': 1e-4,
+            'pad': 0,
+            'tgt_len_size': 50,
+        }
+        self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
+        self.args['inpt_size'] = len(self.vocab)
         self.model = Seq2Seq(
-                self.vocab_size,
-                self.embed_size,
-                self.hidden_size,
-                dropout=self.dropout,
-                bidirectional=self.bidirectional,
-                n_layers=self.n_layers)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-        self.criteiron = nn.NLLLoss(ignore_index=self.pad)
-        self.scheduler = lr_scheduler.ReduceLROnPlateau(self.optimizer,
-                                                        mode='min',
-                                                        factor=self.lr_gamma,
-                                                        patience=self.patience,
-                                                        verbose=True,
-                                                        cooldown=0,
-                                                        min_lr=self.min_lr)
-        self.vocab = vocab
+                self.args['vocab_size'],
+                self.args['embed_size'],
+                self.args['hidden_size'],
+                dropout=self.args['dropout'],
+                bidirectional=self.args['bidirectional'],
+                n_layers=self.args['n_layers']
+        )
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.args['lr'])
+        self.criteiron = nn.NLLLoss(ignore_index=self.args['pad'])
+        self.scheduler = lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',
+            factor=self.lr_gamma,
+            patience=self.patience,
+            verbose=True,
+            cooldown=0,
+            min_lr=self.min_lr)
 
         if torch.cuda.is_available():
             self.model.cuda()
-        print('========== Model ==========')
-        print(self.model)
-        print('========== Model ==========')
-        self.show_parameters()
+        self.model = DataParallel(self.model, device_ids=self.gpu_ids)
+        self.show_parameters(self.args)
 
-    def show_parameters(self):
-        print(f'========== Model Parameters ==========')
-        print(f'hidden size: {self.hidden_size}')
-        print(f'vocab size: {self.vocab_size}')
-        print(f'embed size: {self.embed_size}')
-        print(f'grad clip: {self.grad_clip}')
-        print(f'dropout ratio: {self.dropout}')
-        print(f'bidirectional encoder: {self.bidirectional}')
-        print(f'RNN layers: {self.n_layers}')
-        print(f'<pad> token idx: {self.pad}')
-        print(f'max generated length: {self.tgt_len_size}')
-        print(f'learning ratio: {self.lr}')
-        print(f'lr decay ratio: {self.lr_gamma}')
-        print(f'lr decay patience: {self.patience}')
-        print(f'minimize lr ratio: {self.min_lr}')
-        print(f'========== Model Parameters ==========')
-
-    def train_model(self, train_iter, mode='train'):
+    def train_model(self, train_iter, mode='train', recoder=None):
         self.model.train()
         total_loss, batch_num = 0, 0
         pbar = tqdm(train_iter)
@@ -147,16 +135,16 @@ class Seq2SeqAgent:
             self.optimizer.zero_grad()
             output = self.model(cid, rid, cid_l)
             loss = self.criteiron(
-                    output[1:].view(-1, self.vocab_size),
-                    rid[1:].contiguous().view(-1))
-            if mode == 'train':
-                loss.backward()
-                clip_grad_norm_(self.model.parameters(), self.grad_clip)
-                self.optimizer.step()
+                output[1:].view(-1, self.vocab_size),
+                rid[1:].contiguous().view(-1)
+            )
+            loss.backward()
+            clip_grad_norm_(self.model.parameters(), self.grad_clip)
+            self.optimizer.step()
             total_loss += loss.item()
             batch_num += 1
 
-            pbar.set_description(f'[!] batch {batch_num}, train loss: {round(loss.item(), 4)}')
+            pbar.set_description(f'[!] train loss: {round(loss.item(), 4)}; token acc: ')
         return round(total_loss/batch_num, 4)
 
     def test_model(self, test_iter, path):
@@ -192,11 +180,3 @@ class Seq2SeqAgent:
         # measure the performance
         (b1, b2, b3, b4), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path)
         print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
-
-    def save_model(self, path):
-        torch.save(self.model.state_dict(), path)
-        print(f'[!] save model into {path}')
-
-    def load_model(self, path):
-        self.model.load_state_dict(torch.load(path))
-        print(f'[!] load model from {path}')

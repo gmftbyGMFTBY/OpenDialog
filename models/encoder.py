@@ -49,6 +49,3 @@ class GRUEncoder(nn.Module):
         hidden = hidden.reshape(hidden.shape[0], -1)    # [batch, hidden*...]
         hidden = torch.tanh(self.hidden_project(hidden))     # [batch, hidden]
         return output, hidden
-
-if __name__ == "__main__":
-    pass

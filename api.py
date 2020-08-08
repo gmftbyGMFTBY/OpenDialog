@@ -19,7 +19,7 @@ args['multi_gpu'] = sys.argv[2]
 logger.info(f'[!] begin to init the {args["model"]} agent on {args["multi_gpu"]} GPU')
 if args['model'] == 'bertretrieval':
     agent = BERTRetrievalAgent(args['multi_gpu'], kb=False)
-    agent.load_model(f'ckpt/zh50w/bertretrieval/best.pt')
+    agent.load_model(f'ckpt/zh50w/bertretrieval_cl/best.pt')
 elif args['model'] == 'bertretrieval_multiview':
     agent = BERTMULTIVIEWAgent(args['multi_gpu'], kb=False)
     agent.load_model(f'ckpt/zh50w/bertretrieval_multiview/best.pt')
@@ -88,7 +88,7 @@ def wechat_api():
         my_nonce = request.args.get('nonce')
         my_echostr = request.args.get('echostr')
 
-        token = 'xxxxxxx'    # your token
+        token = 'gmftbyGMFTBY'    # your token
 
         data = [token, my_timestamp, my_nonce]
         data.sort()

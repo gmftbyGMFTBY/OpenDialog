@@ -10,7 +10,7 @@ model=$3
 cuda=$4 
 
 if [ $mode = 'init' ]; then
-    models=(pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 bertretrieval_multiview bertretrieval_cl bertretrieval bertlogic gpt2gan gpt2lm)
+    models=(bertmcf bertmc DualLSTM pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 bertretrieval_multiview bertretrieval_cl bertretrieval bertretrieval_dis bertlogic gpt2gan gpt2lm)
     datasets=(douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
     mkdir bak ckpt rest
     for m in ${models[@]}
@@ -57,7 +57,7 @@ elif [ $mode = 'train' ]; then
         --dataset $dataset \
         --model $model \
         --mode train \
-        --batch_size 32 \
+        --batch_size 2 \
         --n_vocab 70000 \
         --epoch 5 \
         --seed 30 \

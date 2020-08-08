@@ -206,7 +206,7 @@ if __name__ == "__main__":
     # y_true = list('a')
     # y_pred = list('czbajepgard')
     y_true = list('a')
-    y_pred = list('ba')
+    y_pred = list('bacd')
     rel_scores = to_relevance_scores(y_true, y_pred)
     print(f'rel_scores: {rel_scores}')
 

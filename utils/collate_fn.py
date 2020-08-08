@@ -173,26 +173,38 @@ def multigpt2_test_collate_fn(batch):
             r_.append(i.cuda())
     return ctx, res, r_
 
-def ir_collate_fn(batch):
-    cxt, rxt = [], []
-    label = []
-    samples = len(batch[0][2])
-    text_c, text_r = [], []
+def bert_ir_mc_collate_fn(batch):
+    '''input: B*N*S, return: [B, N, S]
+    for test mode: N=10; for train mode: N=2
+    '''
+    ctx, label = [], []    # [B*N], [B]
+    N = len(batch[0]['ids'])
     for i in batch:
-        cxt.extend([i[0]] * (samples+1))
-        rxt.extend([i[1]] + i[2])
-        label.extend(i[3])
-    # cxt: [10*batch_size, 768]
-    cxt = torch.tensor(cxt)
-    rxt = torch.tensor(rxt)
-    assert cxt.shape == rxt.shape, f'ctx: {ctx.shape}; rxt: {rxt.shape}'
-    assert len(text_c) == len(text_r), f'ctx: {len(text_c)}; rxt: {len(text_r)}'
-    label = torch.tensor(label, dtype=torch.float)
+        label.append(i['label'])
+        ctx.extend([torch.LongTensor(k) for k in i['ids']])
+    ctx = pad_sequence(ctx, batch_first=True, padding_value=0)    # [B*N, S]
+    ctx = torch.stack(ctx.split(N))    # [B, N, S]
+    label = torch.tensor(label, dtype=torch.long)    # [B]
     if torch.cuda.is_available():
-        cxt = cxt.cuda()
-        rxt = rxt.cuda()
-        label = label.cuda()
-    return cxt, rxt, label
+        ctx, label = ctx.cuda(), label.cuda()
+    return ctx, label
+
+def bert_ir_dis_train_collate_fn(batch):
+    pad = 0
+    cxt, label = [], []
+    for i in batch:
+        cxt.append(torch.LongTensor(i['context_id']))
+        label.append(i['label'])
+    random_idx = list(range(len(cxt)))
+    random.shuffle(random_idx)
+    cxt = pad_sequence(cxt, batch_first=True, padding_value=pad)    # [batch, seq]
+    cxt = cxt[random_idx]
+
+    label = torch.tensor(label, dtype=torch.long)    # [batch]
+    label = label[random_idx]
+    if torch.cuda.is_available():
+        cxt, label = cxt.cuda(), label.cuda()
+    return cxt, label
 
 def bert_ir_train_collate_fn(batch):
     pad = 0

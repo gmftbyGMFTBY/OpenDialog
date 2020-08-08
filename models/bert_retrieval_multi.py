@@ -15,18 +15,13 @@ class BERTMULTIVIEW(nn.Module):
         super(BERTMULTIVIEW, self).__init__()
         self.model = BertModel.from_pretrained('bert-base-chinese')
         
-        self.fluency_m = nn.Linear(768, 256)
-        self.fluency_head = nn.Linear(256, 2)
-        self.coherence_m = nn.Linear(768, 256)
-        self.coherence_head = nn.Linear(256, 2)
-        self.diversity_m = nn.Linear(768, 256)
-        self.diversity_head = nn.Linear(256, 2)
-        self.naturalness_m = nn.Linear(768, 256)
-        self.naturalness_head = nn.Linear(256, 2)
-        self.relatedness_m = nn.Linear(768, 256)
-        self.relatedness_head = nn.Linear(256, 2)
+        self.fluency_m = nn.Linear(768, 2)
+        self.coherence_m = nn.Linear(768, 2)
+        self.diversity_m = nn.Linear(768, 2)
+        self.naturalness_m = nn.Linear(768, 2)
+        self.relatedness_m = nn.Linear(768, 2)
         
-        self.head = nn.Linear(256, 2)
+        self.head = nn.Linear(2*5, 2)
 
     def forward(self, inpt, aspect='coherence'):
         if aspect != 'overall':
@@ -40,35 +35,31 @@ class BERTMULTIVIEW(nn.Module):
             output = torch.mean(output, dim=1)    # [batch, 768]
 
         if aspect == 'coherence':
-            coherence_m = torch.tanh(self.coherence_m(output))
-            coherence_rest = self.coherence_head(coherence_m)    # [batch, 2]
+            coherence_rest = self.coherence_m(output)
             return coherence_rest
         elif aspect == 'fluency':
-            fluency_m = torch.tanh(self.fluency_m(output))
-            fluency_rest = self.fluency_head(fluency_m)    # [batch, 2]
+            fluency_rest = self.fluency_m(output)
             return fluency_rest
         elif aspect == 'diversity':
-            diversity_m = torch.tanh(self.diversity_m(output))
-            diversity_rest = self.diversity_head(diversity_m)    # [batch, 2]
+            diversity_rest = self.diversity_m(output)
             return diversity_rest
         elif aspect == 'naturalness':
-            naturalness_m = torch.tanh(self.naturalness_m(output))
-            naturalness_rest = self.naturalness_head(naturalness_m)    # [batch, 2]
+            naturalness_rest = self.naturalness_m(output)
             return naturalness_rest
         elif aspect == 'relatedness':
-            relatedness_m = torch.tanh(self.relatedness_m(output))
-            relatedness_rest = self.relatedness_head(relatedness_m)    # [batch, 2]
+            relatedness_rest = self.relatedness_m(output)
             return relatedness_rest
         elif aspect == 'overall':
-            fluency_m = torch.tanh(self.fluency_m(output))
-            coherence_m = torch.tanh(self.coherence_m(output))
-            diversity_m = torch.tanh(self.diversity_m(output))
-            naturalness_m = torch.tanh(self.naturalness_m(output))
-            relatedness_m = torch.tanh(self.relatedness_m(output))
-            output = torch.stack(
-                [fluency_m, coherence_m, diversity_m, naturalness_m, relatedness_m]
-            ).mean(dim=0)    # 5*[batch, 256] -> [5, batch, 256] -> [batch, 256]
-            output = self.head(output)    # [batch, 2]
+            fluency_m = self.fluency_m(output)
+            coherence_m = self.coherence_m(output)
+            diversity_m = self.diversity_m(output)
+            naturalness_m = self.naturalness_m(output)
+            relatedness_m = self.relatedness_m(output)
+            output = torch.cat(
+                [fluency_m, coherence_m, diversity_m, naturalness_m, relatedness_m],
+                dim=1,
+            )    # [batch, 10]
+            output = self.head(torch.relu(output))    # [batch, 2]
             return output
         else:
             raise Exception(f'[!] target aspect {aspect} is unknown')

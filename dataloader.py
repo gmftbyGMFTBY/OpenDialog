@@ -708,6 +708,68 @@ class BERTIRMultiDataLoader:
                 if torch.cuda.is_available():
                     labels = torch.LongTensor(labels).cuda()
                 return rest, labels
+            
+class BERTMCDataset(Dataset):
+    
+    def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
+                 max_len=300, samples=1, vocab_file='data/vocab/vocab_small', 
+                 model_type='mc'):
+        assert samples == 1
+        self.mode = mode
+        self.max_len = max_len 
+        data = read_text_data(path)
+        responses = [i[1] for i in data]
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        
+        self.pp_path = f'{os.path.splitext(path)[0]}_{model_type}.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data, d_ = [], []
+        for i in tqdm(data):
+            context, response = i[0], i[1]
+            negative = generate_negative_samples(response, responses, samples=samples)
+            d_.append((context, [response] + negative))
+        
+        if mode in ['train', 'dev']:
+            for context, responses in tqdm(d_):
+                response, negative = responses
+                context_id = self.vocab.encode(context)
+                response_id = self.vocab.encode(response)
+                negative_id = self.vocab.encode(negative)
+                choice1 = context_id + response_id[1:]
+                choice2 = context_id + negative_id[1:]
+                bundle = dict()
+                if random.random() < 0.5:
+                    bundle['ids'] = [choice1[-self.max_len:], choice2[-self.max_len:]]
+                    bundle['label'] = 0
+                else:
+                    bundle['ids'] = [choice2[-self.max_len:], choice1[-self.max_len:]]
+                    bundle['label'] = 1
+                self.data.append(bundle)
+            self.data = sorted(self.data, key=lambda i: (len(i['ids'][0]) + len(i['ids'][1]))/2)
+        else:
+            for context, response in tqdm(d_):
+                context_id = self.vocab.encode(context)
+                ids = [context_id + self.vocab.encode(r)[1:] for r in response]
+                bundle = dict()
+                bundle['ids'] = ids
+                bundle['label'] = 0
+                self.data.append(bundle)
+                
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        return bundle
+    
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
 
 class BERTIRDataset(Dataset):
 
@@ -865,6 +927,83 @@ class BERTIRDataset(Dataset):
                 p = bundle['context_id'] + bundle['reply_id'][i][1:]
                 ids.append(torch.LongTensor(p[-self.max_len:]))
         return ids, bundle['label'] 
+    
+    def save_pickle(self):
+        with open(self.pp_path, 'wb') as f:
+            pickle.dump(self.data, f)
+        print(f'[!] save dataset into {self.pp_path}')
+        
+class BERTIRDISDataset(Dataset):
+
+    '''
+    BERT IR Curriculum Learning Dataset
+    The negative samples maybe use the different negative sampling strategies to collect the different difficult samples.
+    '''
+
+    def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
+                 max_len=300, samples=1, vocab_file='data/vocab/vocab_small'):
+        agent = BERTRetrievalAgent(args['multi_gpu'], kb=False)
+        agent.load_model(f'ckpt/zh50w/bertretrieval/best.pt')
+        print(f'[!] load the bert retrieval model over')
+        self.mode = mode
+        self.max_len = max_len 
+        # data = read_csv_data(path)
+        data = read_text_data(path)
+        # context and response are all the negative samples 
+        responses = [i[1] for i in data]
+        # self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        
+        self.pp_path = f'{os.path.splitext(path)[0]}_dis.pkl'
+        if os.path.exists(self.pp_path):
+            with open(self.pp_path, 'rb') as f:
+                self.data = pickle.load(f)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data = []
+
+        # collect the data samples
+        d_ = []
+        for i in tqdm(data):
+            context, response = i[0], i[1]
+            negative = generate_negative_samples(response, responses, samples=samples)
+            d_.append((context, [response] + negative))
+        
+        if mode in ['train', 'dev']:
+            # concatenate the context and the response
+            for context, responses in tqdm(d_):
+                response, negative = responses
+                context_id = self.vocab.encode(context)
+                response_id = self.vocab.encode(response)
+                negative_id = self.vocab.encode(negative)
+                bundle = dict()
+                if random.random() < 0.5:
+                    ids = context_id + response_id[1:] + negative_id[1:]
+                    bundle['label'] = 1
+                else:
+                    ids = context_id + negative_id[1:] + response_id[1:]
+                    bundle['label'] = 0
+                bundle['context_id'] = ids[-self.max_len:]
+                self.data.append(bundle)
+        else:
+            for item in tqdm(d_):
+                context, response = item
+                response, negative = response[0], response[1:]
+                context_id = self.vocab.encode(context)
+                response_id = self.vocab.encode(response)
+                negative_ids = [self.vocab.encode(i) for i in negative]
+                bundle = dict()
+                bundle['context_id'] = context_id
+                bundle['reply_id'] = [response_id] + res_ids
+                bundle['label'] = [1] + [0] * samples
+                self.data.append(bundle)
+                
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        return bundle
     
     def save_pickle(self):
         with open(self.pp_path, 'wb') as f:
@@ -1053,14 +1192,14 @@ class BERTIRCLDataLoader:
                 #     len(data), self.batch_size, p=self.normal(p), replace=False,
                 # )
                 # ========== priority sample with pool size (not so slow but also priority) ==========
-                pool_index = random.sample(range(len(data)), self.pool_size)
-                probability = [self.priority[i] for i in pool_index]
-                self.last_index = np.random.choice(
-                    pool_index, 
-                    self.batch_size, 
-                    p=self.normal(probability), 
-                    replace=False,
-                )
+                # pool_index = random.sample(range(len(data)), self.pool_size)
+                # probability = [self.priority[i] for i in pool_index]
+                # self.last_index = np.random.choice(
+                #     pool_index, 
+                #     self.batch_size, 
+                #     p=self.normal(probability), 
+                #     replace=False,
+                # )
                 
                 batch = [data[i] for i in self.last_index]
                 # construct the tensor
@@ -1072,51 +1211,7 @@ class BERTIRCLDataLoader:
                     labels = labels.cuda()
                 self.t += 1
                 return round(p_, 4), self.priority[:p].count(10000.0), delta_, ids, labels
-
-class IRDataset(Dataset):
-
-    '''
-    Dataset for training the IR head.
-    After training one epoch, rebuild it for new negative samples
-
-    Bert-as-service needed
-    '''
-
-    def __init__(self, path, picklepath, mode='train', samples=9, n_vocab=50000):
-        self.mode = mode
-        data = read_csv_data(path)
-        # build the vocab
-        responses = [i[1] for i in data]
-        self.data = []
-        # load the processed data
-        with open(picklepath, 'rb') as f:
-            cs, rs = pickle.load(f)
-            print(f'[!] already load .pkl data for IR training')
-        for idx in tqdm(range(len(data))):
-            item = data[idx]
-            bundle = dict()
-            bundle['context_text'] = item[0].replace('<eou>', '。')
-            bundle['reply_text'] = item[1]
-            bundle['context_emb'] = cs[idx]
-            bundle['reply_emb'] = rs[idx]
-            # random search the idx from the dataset
-            ridx = random.sample(range(len(data)), samples)
-            while idx in ridx:
-                ridx = random.sample(range(len(data)), samples)
-            bundle['negative_text'] = [data[i][1] for i in ridx]
-            bundle['negative_emb'] = [rs[i] for i in ridx]
-            bundle['label'] = [1] + [0] * samples
-            self.data.append(bundle)
-        print(f'[!] {mode} dataset init over, size: {len(self.data)}')
-
-    def __getitem__(self, i):
-        bundle = self.data[i]
-        cxt, rxt, nxt, label = bundle['context_emb'], bundle['reply_emb'], bundle['negative_emb'], bundle['label']
-        return cxt, rxt, nxt, label
-
-    def __len__(self):
-        return len(self.data)
-
+        
 class DecoupleGPT2RLDataset(Dataset):
 
     '''

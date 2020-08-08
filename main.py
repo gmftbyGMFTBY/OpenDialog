@@ -23,7 +23,7 @@ def parser_args():
     return parser.parse_args()
 
 def load_dataset(args):
-    if args['model'] == 'retrieval':
+    if args['model'] == 'DualLSTM':
         return load_ir_dataset(args)
     elif args['model'] == 'seq2seq':
         return load_seq2seq_dataset(args)
@@ -55,6 +55,10 @@ def load_dataset(args):
         return load_bert_ir_multiview_dataset(args)
     elif args['model'] == 'bertretrieval_cl':
         return load_bert_ir_cl_dataset(args)
+    elif args['model'] in ['bertmc', 'bertmcf']:
+        return load_bert_ir_mc_dataset(args)
+    elif args['model'] == 'bertretrieval_dis':
+        return load_bert_ir_dis_dataset(args)
     elif args['model'] == 'bertnli':
         return load_bert_nli_dataset(args)
     elif args['model'] == 'bertlogic':
@@ -73,25 +77,28 @@ def main(**args):
         sum_writer = SummaryWriter(log_dir=f'rest/{args["dataset"]}/{args["model"]}')
 
     agent_map = {
-            'retrieval': RetrievalAgent, 
-            'seq2seq': Seq2SeqAgent,
-            'gpt2': GPT2Agent,
-            'gpt2retrieval': GPT2RetrievalAgent,
-            'pfgpt2': PFGPT2Agent,
-            'kwgpt2': KWGPT2Agent,
-            'gpt2_mmi': GPT2Agent,
-            'when2talk': When2TalkAgent,
-            'gpt2lm': GPT2Agent,
-            'multigpt2': MultiGPT2Dataset,
-            'bertretrieval': BERTRetrievalAgent,
-            'bertretrieval_multiview': BERTMULTIVIEWAgent,
-            'bertretrieval_cl': BERTRetrievalCLAgent,
-            'bertlogic': BERTRetrievalAgent,
-            'bertnli': BERTNLIAgent,
-            'gpt2gan': GPT2RLAgent,
-            'gpt2gan_v2': GPT2RLAgent_V2,
-            'pone': PONEAgent,
-            }
+        'DualLSTM': DualLSTMAgent, 
+        'seq2seq': Seq2SeqAgent,
+        'gpt2': GPT2Agent,
+        'gpt2retrieval': GPT2RetrievalAgent,
+        'pfgpt2': PFGPT2Agent,
+        'kwgpt2': KWGPT2Agent,
+        'gpt2_mmi': GPT2Agent,
+        'when2talk': When2TalkAgent,
+        'gpt2lm': GPT2Agent,
+        'multigpt2': MultiGPT2Dataset,
+        'bertretrieval': BERTRetrievalAgent,
+        'bertretrieval_multiview': BERTMULTIVIEWAgent,
+        'bertretrieval_cl': BERTRetrievalCLAgent,
+        'bertlogic': BERTRetrievalAgent,
+        'bertnli': BERTNLIAgent,
+        'gpt2gan': GPT2RLAgent,
+        'gpt2gan_v2': GPT2RLAgent_V2,
+        'pone': PONEAgent,
+        'bertmc': BERTMCAgent,
+        'bertmcf': BERTMCAgent,
+        'bertretrieval_dis': BERTRetrievalDISAgent,
+    }
     parameter_map, parameter_key = collect_parameter_4_model(args)
     agent = agent_map[args['model']](*parameter_map, **parameter_key)
 
@@ -117,10 +124,10 @@ def main(**args):
         else:
             for i in tqdm(range(args['epoch'])):
                 train_loss = agent.train_model(
-                        train_iter, 
-                        mode='train')
-                sum_writer.add_scalar(f'{args["dataset"]}-Loss/train', train_loss, i)
-                sum_writer.flush()
+                    train_iter, 
+                    mode='train',
+                    recoder=sum_writer,
+                )
                 # with torch.no_grad():
                 #     dev_loss = agent.train_model(dev_iter, mode='dev')
                 agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')

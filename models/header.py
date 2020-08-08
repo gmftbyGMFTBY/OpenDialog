@@ -29,7 +29,7 @@ from .base import *
 from bert_serving.client import BertClient
 from transformers.modeling_gpt2 import GPT2Model, GPT2Config, GPT2LMHeadModel
 from transformers import BertTokenizer
-from transformers import BertForSequenceClassification, BertModel
+from transformers import BertForSequenceClassification, BertModel, BertForMultipleChoice
 from transformers import AutoModelWithLMHead, AutoTokenizer
 import transformers
 import requests

@@ -1,11 +1,17 @@
 from header import *
 
 def collect_parameter_4_model(args):
-    if args['model'] == 'retrieval':
-        return (), {}
+    if args['model'] == 'DualLSTM':
+        return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'bertretrieval':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
+    elif args['model'] == 'bertmc':
+        return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang'], 'model_type': 'mc'}
+    elif args['model'] == 'bertmcf':
+        return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang'], 'model_type': 'mcf'}
     elif args['model'] == 'bertretrieval_cl':
+        return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
+    elif args['model'] == 'bertretrieval_dis':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'pone':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
@@ -38,7 +44,7 @@ def collect_parameter_4_model(args):
     elif args['model'] == 'multigpt2':
         return (args['total_steps'],), {'run_mode': args['mode'], 'lang': args['lang']}
     else:
-        raise Exception(f'[!] except model retrieval/seq2seq/gpt2, but got {args["model"]}')
+        raise Exception(f'[!] unknow model {args["model"]}')
 
 def read_stop_words(path):
     with open(path) as f:

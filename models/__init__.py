@@ -14,3 +14,5 @@ from .test import *
 from .model_utils import *
 from .dialogpt import *
 from .pone import *
+from .DualLSTM import *
+from .bert_mc import *

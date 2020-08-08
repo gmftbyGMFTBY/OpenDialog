@@ -105,11 +105,35 @@ def load_multigpt2_dataset(args):
     return iter_
 
 def load_ir_dataset(args):
-    path = f'data/{args["dataset"]}/{args["mode"]}.csv'
-    pickle_path = f'data/{args["dataset"]}/{args["mode"]}.pkl'
-    print(f'[!] load dataset from {path} and {pickle_path}')
-    data = IRDataset(path, pickle_path, mode=args['mode'])
-    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=ir_collate_fn)
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    if args['mode'] in ['train', 'dev']:
+        data = BERTIRDataset(path, mode=args['mode'], samples=1, max_len=512, negative_aspect='overall')
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
+    else:
+        data = BERTIRDataset(path, mode=args['mode'], samples=1, max_len=512, negative_aspect='overall')
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)
+    if not os.path.exists(data.pp_path):
+        data.save_pickle()
+    return iter_
+
+def load_bert_ir_dis_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    if args['mode'] in ['train', 'dev']:
+        data = BERTIRDISDataset(path, mode=args['mode'], samples=1, max_len=512)
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_dis_train_collate_fn)
+    else:
+        data = BERTIRDISDataset(path, mode=args['mode'], samples=9, max_len=512)
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)
+    if not os.path.exists(data.pp_path):
+        data.save_pickle()
+    return iter_
+
+def load_bert_ir_mc_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    data = BERTMCDataset(path, mode=args['mode'], samples=1, max_len=512)
+    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_mc_collate_fn)
+    if not os.path.exists(data.pp_path):
+        data.save_pickle()
     return iter_
 
 def load_bert_ir_multi_dataset(args):
@@ -128,7 +152,7 @@ def load_bert_ir_cl_dataset(args):
         T = int(len(data) * args['epoch'] / args['batch_size']) + 1
         iter_ = BERTIRCLDataLoader(data, T, batch_size=args['batch_size'])
     else:
-        data = BERTIRCLDataset(path, mode=args['mode'], samples=9)
+        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='overall')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)
     if not os.path.exists(data.pp_path):
         data.save_pickle()
@@ -157,7 +181,7 @@ def load_bert_ir_multiview_dataset(args):
         for aspect in ['coherence', 'fluency', 'diversity', 'naturalness', 'relatedness', 'overall']:
             path = f'data/{args["dataset"]}/{args["mode"]}.txt'
             # samples = 1 if aspect in ['diversity', 'overall'] else 5
-            samples = 5
+            samples = 5 
             if args['mode'] in ['train', 'dev']:
                 data = BERTIRDataset(path, mode=args['mode'], samples=samples, negative_aspect=aspect, reduce=True, reduce_num=50000)
                 iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)

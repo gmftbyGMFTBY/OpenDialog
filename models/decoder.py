@@ -81,6 +81,3 @@ class GRUDecoder(nn.Module):
         output = F.log_softmax(output, dim=1)
 
         return output, hidden
-
-if __name__ == "__main__":
-    pass

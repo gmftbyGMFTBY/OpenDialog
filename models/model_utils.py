@@ -330,7 +330,7 @@ class IRHead(nn.Module):
         super(IRHead, self).__init__()
         self.M = nn.Parameter(torch.randn(hidden_size, hidden_size))
         self.hidden_layer = nn.Linear(hidden_size*2+1, hidden_size)
-        self.opt_layer = nn.Linear(hidden_size, 1)
+        self.opt_layer = nn.Linear(hidden_size, 2)
         self.hidden_drop = nn.Dropout(p=dropout)
 
     def forward(self, src_embed, tgt_embed):
@@ -338,7 +338,7 @@ class IRHead(nn.Module):
         src_embed: [batch, hidden]
         tgt_embed: [batch, hidden]
 
-        return the score: [batch]
+        return the score: [batch, 2]
         '''
         src_hidden = src_embed.unsqueeze(1)    # [batch, 1, hidden]
         tgt_hidden = tgt_embed.unsqueeze(2)    # [batch, hidden, 1]
@@ -347,7 +347,7 @@ class IRHead(nn.Module):
         tgt_hidden = tgt_hidden.squeeze(2)
         inpt = torch.cat([src_hidden, score, tgt_hidden], 1)    # [batch, 2*hidden+1]
         inpt = self.hidden_drop(torch.tanh(self.hidden_layer(inpt)))    # [batch, hidden]
-        score = torch.sigmoid(self.opt_layer(inpt).squeeze(1))    # [batch]
+        score = self.opt_layer(inpt)    # [batch, 2]
         return score
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-np.inf):
@@ -413,6 +413,17 @@ def generate_attention_mask(inpt_ids):
 def filter_gpt2rl(x):
     x = [''.join(ii) for ii in x]
     return [ii.replace('[CLS]', '').replace('[PAD]', '').replace('[SEP]', '') for ii in x]
+
+def generate_attention_mask_mc(inpt_ids):
+    '''
+    inpt_ids: [B, N, S]
+    '''
+    bsz = inpt_ids.size(0)    # B
+    attn_mask = torch.zeros_like(inpt_ids)    # [B, N, S]
+    for i in range(bsz):
+        not_masked_token_idx = inpt_ids[i].nonzero().transpose(0, 1).tolist()
+        attn_mask[i][not_masked_token_idx] = 1
+    return attn_mask
 
 class PositionEmbedding(nn.Module):
 
