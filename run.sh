@@ -57,7 +57,7 @@ elif [ $mode = 'train' ]; then
         --dataset $dataset \
         --model $model \
         --mode train \
-        --batch_size 2 \
+        --batch_size 8 \
         --n_vocab 70000 \
         --epoch 5 \
         --seed 30 \
@@ -70,7 +70,7 @@ elif [ $mode = 'test' ]; then
     if [[ ${one_batch_model[@]} =~ $model ]]; then
         batch_size=1
     else
-        batch_size=32
+        batch_size=16
     fi
     
     english_datasets=(mutual dstc7 empchat dailydialog personachat)

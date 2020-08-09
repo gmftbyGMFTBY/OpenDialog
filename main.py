@@ -127,9 +127,8 @@ def main(**args):
                     train_iter, 
                     mode='train',
                     recoder=sum_writer,
+                    idx=i,
                 )
-                # with torch.no_grad():
-                #     dev_loss = agent.train_model(dev_iter, mode='dev')
                 agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
         sum_writer.close()
     else:

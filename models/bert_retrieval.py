@@ -330,6 +330,10 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             now_correct = torch.sum(now_correct == label).item()
             correct += now_correct
             s += len(label)
+            
+            recoder.add_scalar('train/Loss', loss.item(), idx)
+            recoder.add_scalar('train/Acc', correct/s, idx)
+            recoder.add_scalar('train/RunAcc', now_correct/len(label), idx)
 
             pbar.set_description(f'[!] batch: {batch_num}; train loss: {round(loss.item(), 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
         print(f'[!] overall acc: {round(correct/s, 4)}')

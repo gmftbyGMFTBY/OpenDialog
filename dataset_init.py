@@ -130,7 +130,11 @@ def load_bert_ir_dis_dataset(args):
 
 def load_bert_ir_mc_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-    data = BERTMCDataset(path, mode=args['mode'], samples=1, max_len=512)
+    if args['mode'] == 'train':
+        samples = 1
+    else:
+        samples = 9
+    data = BERTMCDataset(path, mode=args['mode'], samples=samples, max_len=512)
     iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_mc_collate_fn)
     if not os.path.exists(data.pp_path):
         data.save_pickle()

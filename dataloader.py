@@ -714,7 +714,6 @@ class BERTMCDataset(Dataset):
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
                  max_len=300, samples=1, vocab_file='data/vocab/vocab_small', 
                  model_type='mc'):
-        assert samples == 1
         self.mode = mode
         self.max_len = max_len 
         data = read_text_data(path)
@@ -749,7 +748,8 @@ class BERTMCDataset(Dataset):
                     bundle['ids'] = [choice2[-self.max_len:], choice1[-self.max_len:]]
                     bundle['label'] = 1
                 self.data.append(bundle)
-            self.data = sorted(self.data, key=lambda i: (len(i['ids'][0]) + len(i['ids'][1]))/2)
+            # max is better than min
+            self.data = sorted(self.data, key=lambda i: max(len(i['ids'][0]), len(i['ids'][1])))
         else:
             for context, response in tqdm(d_):
                 context_id = self.vocab.encode(context)
