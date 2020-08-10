@@ -22,22 +22,22 @@ class BERTMC(nn.Module):
     
 class BERTMCFusion(nn.Module):
     
-    def __init__(self, model='bert-base-chinese', dropout=0.3, num_layers=1):
+    def __init__(self, model='bert-base-chinese', dropout=0.1, num_layers=1, nhead=1):
         super(BERTMCFusion, self).__init__()
         self.bert = BertModel.from_pretrained(model)
         encoder_layer = nn.TransformerEncoderLayer(
             768, 
-            nhead=2, 
+            nhead=nhead,
             dim_feedforward=768, 
             dropout=dropout,
         )
         # [N, B, 768] -> [N, B, 768]
         self.fusion = nn.TransformerEncoder(
             encoder_layer, 
-            num_layers
+            num_layers,
         )
         self.dropout = nn.Dropout(dropout)
-        self.classifier = nn.Linear(768, 1)
+        self.classifier = nn.Linear(768*2, 1)
         
     def forward(self, inpt):
         # inpt: [B, N, S], default N is 2 (one positive and one negative)
@@ -48,11 +48,14 @@ class BERTMCFusion(nn.Module):
             input_ids=inpt,
             attention_mask=attn_mask,
         )
-        logits = output[0]    # [B*N, S, 768]
+        # NOTE: [CLS] token is better ?
+        # logits = output[1]    # [B*N, 768]
+        logits = output[0]    # [B, N, 768]
         logits = logits.mean(dim=1)    # [B*N, 768]
-        logits = torch.stack(logits.split(num_choices)).transpose(0, 1)    # [N, B, 768]
-        logits = self.fusion(logits).transpose(0, 1)    # [N, B, 768] -> [B, N, 768]
-        logits = self.classifier(self.dropout(logits)).squeeze(-1)    # [B, N, 1] -> [B, N]
+        logits = torch.stack(logits.split(num_choices))    # [B, N, 768]
+        logits_ = self.fusion(logits.transpose(0, 1)).transpose(0, 1)    # [B, N, 768]
+        opt = torch.cat([logits, logits_], dim=2)    # [B, N, 768*2]
+        logits = self.classifier(self.dropout(opt)).squeeze(-1)    # [B, N, 1] -> [B, N]
         return logits
     
 class BERTMCAgent(RetrievalBaseAgent):
@@ -72,8 +75,9 @@ class BERTMCAgent(RetrievalBaseAgent):
             'talk_samples': 256,
             'vocab_file': 'bert-base-chinese',
             'pad': 0,
-            'dropout': 0.5,
+            'dropout': 0.1,
             'num_layer': 1,
+            'nhead': 1,    # NOTE:
             'model': 'bert-base-chinese',
             'model_type': model_type,
         }
@@ -85,7 +89,8 @@ class BERTMCAgent(RetrievalBaseAgent):
             self.model = BERTMCFusion(
                 self.args['model'], 
                 dropout=self.args['dropout'], 
-                num_layers=self.args['num_layer']
+                num_layers=self.args['num_layer'],
+                nhead=self.args['nhead'],
             )
         else:
             raise Exception(f'[!] unknow model type {self.args["model_type"]}')
@@ -100,7 +105,7 @@ class BERTMCAgent(RetrievalBaseAgent):
         self.criterion = nn.CrossEntropyLoss()
         self.show_parameters(self.args)
 
-    def train_model(self, train_iter, mode='train', recoder=None, idx=0):
+    def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
         self.model.train()
         total_loss, batch_num = 0, 0
         pbar = tqdm(train_iter)
@@ -123,12 +128,23 @@ class BERTMCAgent(RetrievalBaseAgent):
             correct += now_correct
             s += len(label)
             
-            recoder.add_scalar(f'train-epoch-{idx}/Loss', loss.item(), idx)
-            recoder.add_scalar(f'train-epoch-{idx}/Acc', correct/s, idx)
-            recoder.add_scalar(f'train-epoch-{idx}/RunAcc', now_correct/len(label), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Acc', correct/s, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', now_correct/len(label), idx)
 
             pbar.set_description(f'[!] loss: {round(loss.item(), 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
         return round(total_loss / batch_num, 4)
+    
+    @torch.no_grad()
+    def predict(self, src, tgt):
+        # src/tgt: [B, S] -> [1, B(N), S_c+S_r]
+        batch = torch.cat([src, tgt], dim=1)    # [B, S]
+        batch = batch.unsqueeze(0)    # [1, N, S]
+        rest = self.model(batch).squeeze(0)    # [N]
+        rest = F.softmax(rest)    # [N]
+        index = torch.argmax(rest).item()
+        return index
     
     @torch.no_grad()
     def test_model(self, test_iter, path):
@@ -145,12 +161,15 @@ class BERTMCAgent(RetrievalBaseAgent):
                 rest.append(([0], pred.tolist()))
         p_1, r2_1, r10_1, r10_2, r10_5, MAP, MRR = cal_ir_metric(rest)
         print(f'[TEST] P@1: {p_1}; R2@1: {r2_1}; R10@1: {r10_1}; R10@2: {r10_2}; R10@5: {r10_5}; MAP: {MAP}; MRR: {MRR}')
+        with open(path, 'w') as f:
+            f.write(f'[TEST] P@1: {p_1}; R2@1: {r2_1}; R10@1: {r10_1}; R10@2: {r10_2}; R10@5: {r10_5}; MAP: {MAP}; MRR: {MRR}\n')
 
     @torch.no_grad()
     def talk(self, topic, msgs):
         '''
         Batch size is the Num choice {B=N}
         '''
+        self.model.eval()
         # retrieval and process
         utterances_, ids = self.process_utterances(topic, msgs)
         # ids: [N, S]

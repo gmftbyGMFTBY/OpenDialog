@@ -176,23 +176,31 @@ class GPT2Agent(BaseAgent):
         
         # run_mode == 'chatbot', use the bertretrieval for reranking
         if run_mode in ['rerank', 'rerank_ir']:
+            '''
             from multiview import MultiView
             print(f'[!] MultiView reranker model will be initized')
             self.reranker = MultiView(
-                    topic=True,
-                    length=False,
-                    nidf_tf=True,
-                    coherence=True,
-                    fluency=False,
-                    repetition_penalty=True,
-                    mmi=True,
-                    distinct=True,
-                    mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
-                    coherence_path='ckpt/train_retrieval/bertretrieval/best.pt',
-                    topic_path='ckpt/fasttext/model.bin',
-                    fluency_path='ckpt/LM/gpt2lm/best.pt',
-                    )
+                topic=True,
+                length=False,
+                nidf_tf=True,
+                coherence=True,
+                fluency=False,
+                repetition_penalty=True,
+                mmi=True,
+                distinct=True,
+                mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
+                coherence_path='ckpt/train_retrieval/bertretrieval/best.pt',
+                topic_path='ckpt/fasttext/model.bin',
+                fluency_path='ckpt/LM/gpt2lm/best.pt',
+            )
             print(f'[!] load multiview model over')
+            '''
+            from .bert_mc import BERTMCAgent
+            from .bert_retrieval import BERTRetrievalAgent
+            # self.reranker = BERTRetrievalAgent(multi_gpu, kb=False)
+            # self.reranker.load_model('ckpt/zh50w/bertretrieval/best.pt')
+            self.reranker = BERTMCAgent(multi_gpu, kb=False)
+            self.reranker.load_model('ckpt/zh50w/bertmc/best.pt', mode_type='mc')
 
         if run_mode == 'rerank_ir':
             self.ir_agent = TestAgent()
@@ -277,6 +285,7 @@ class GPT2Agent(BaseAgent):
                 f.write('\n')
         print(f'[!] translate test dataset over, write into {path}')
 
+    @torch.no_grad()
     def test_model(self, test_iter, path):
         '''
         Generate the test dataset and measure the performance
@@ -306,7 +315,52 @@ class GPT2Agent(BaseAgent):
         # measure the performance
         (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])
         print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Length(max, min, avg): {c_max_l}/{c_min_l}/{c_avg_l}|{r_max_l}/{r_min_l}/{r_avg_l}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
-    
+
+    @torch.no_grad()
+    def test_model_rerank(self, test_iter, path, beam_size=16):
+        '''
+        Generate the test dataset and measure the performance
+        Batch size must be 1; default runing batch size (beam search size) is 16
+        '''
+        def filter(x):
+            return x.replace('[PAD]', '')
+        self.model.eval()
+        pbar = tqdm(test_iter)
+        with open(path, 'w') as f:
+            for batch in pbar:
+                ipdb.set_trace()
+                c, r = batch    # [S]
+                c_ = [deepcopy(c) for _ in range(beam_size)]
+                c_ = torch.stack(c_)    # [B, S]
+                
+                max_size = max(len(r), self.args['tgt_len_size'])
+                tgt = self.model.predict_batch(c_, max_size)
+                
+                # convert tgt to batch [B(beam_size), S]
+                tgt_ = to_cuda(torch.stack([torch.LongTensor(i) for i in tgt]))    # [B, S]
+                
+                # rerank procedure
+                index = self.reranker.predict(c_, tgt_)
+                tgt = tgt[index]
+                
+                # ids to tokens
+                text = self.vocab.convert_ids_to_tokens(tgt)
+                tgt = ''.join(text)
+
+                ctx = self.vocab.convert_ids_to_tokens(c)
+                ctx = filter(''.join(ctx))
+
+                ref = self.vocab.convert_ids_to_tokens(r)
+                ref = filter(''.join(ref))
+
+                f.write(f'CTX: {ctx}\n')
+                f.write(f'REF: {ref}\n')
+                f.write(f'TGT: {tgt}\n\n')
+        print(f'[!] translate test dataset over, write into {path}')
+        # measure the performance
+        (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])
+        print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Length(max, min, avg): {c_max_l}/{c_min_l}/{c_avg_l}|{r_max_l}/{r_min_l}/{r_avg_l}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
+        
     @torch.no_grad()
     def talk(self, topic, msgs, maxlen=50, batch_size=32):
         '''
@@ -317,16 +371,18 @@ class GPT2Agent(BaseAgent):
 
         if the topic of the msgs is very low, append the trigger sentences into the msgs
         '''
-        if topic is None:
-            self.reranker.mode['topic'] = False
-        else:
-            # detect the topic of the msgs
-            if self.args['run_mode'] in ['rerank', 'rerank_ir']:
-                if not self.reranker.topic_scores(msgs, topic):
-                    trigger_s = random.choice(self.trigger_utterances[topic])
-                    msgs = f'{trigger_s} [SEP] {msgs}'
-                    print(f'[!] topic trigger mode is set up: {msgs}')
-        # tokenizer
+        self.model.eval()
+        # ========== SMP-MCC use it ==========
+        # if topic is None:
+        #     self.reranker.mode['topic'] = False
+        # else:
+        #     # detect the topic of the msgs
+        #     if self.args['run_mode'] in ['rerank', 'rerank_ir']:
+        #         if not self.reranker.topic_scores(msgs, topic):
+        #             trigger_s = random.choice(self.trigger_utterances[topic])
+        #             msgs = f'{trigger_s} [SEP] {msgs}'
+        #             print(f'[!] topic trigger mode is set up: {msgs}')
+        # ========== SMP-MCC use it ==========
         if self.args['run_mode'] == 'test':
             msgs = torch.LongTensor(self.vocab.encode(msgs)[-(512-maxlen):])
             msgs = to_cuda(msgs)

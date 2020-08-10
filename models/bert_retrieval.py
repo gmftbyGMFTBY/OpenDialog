@@ -392,6 +392,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         return round(total_loss/batch_num, 4)
 
     def talk(self, topic, msgs):
+        self.model.eval()
         with torch.no_grad():
             # retrieval and process
             utterances_, ids = self.process_utterances(topic, msgs)
@@ -429,6 +430,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             return rest 
 
     def rerank(self, topic, msgs, topk=2):
+        self.model.eval()
         with torch.no_grad():
             utterances_, ids = self.process_utterances(topic, msgs)
             output = self.model(ids)

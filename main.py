@@ -127,7 +127,7 @@ def main(**args):
                     train_iter, 
                     mode='train',
                     recoder=sum_writer,
-                    idx=i,
+                    idx_=i,
                 )
                 agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
         sum_writer.close()

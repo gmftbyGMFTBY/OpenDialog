@@ -19,7 +19,11 @@ args['multi_gpu'] = sys.argv[2]
 logger.info(f'[!] begin to init the {args["model"]} agent on {args["multi_gpu"]} GPU')
 if args['model'] == 'bertretrieval':
     agent = BERTRetrievalAgent(args['multi_gpu'], kb=False)
-    agent.load_model(f'ckpt/zh50w/bertretrieval_cl/best.pt')
+    agent.load_model(f'ckpt/zh50w/bertretrieval/best.pt')
+elif args['model'] == 'bertmc':
+    # [model_type]: bertmc -> mc; bertmcf -> mcf
+    agent = BERTMCAgent(args['multi_gpu'], kb=False, model_type='mc')
+    agent.load_model(f'ckpt/zh50w/bertmc/best.pt')
 elif args['model'] == 'bertretrieval_multiview':
     agent = BERTMULTIVIEWAgent(args['multi_gpu'], kb=False)
     agent.load_model(f'ckpt/zh50w/bertretrieval_multiview/best.pt')

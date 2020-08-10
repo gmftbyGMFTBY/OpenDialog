@@ -70,7 +70,7 @@ elif [ $mode = 'test' ]; then
     if [[ ${one_batch_model[@]} =~ $model ]]; then
         batch_size=1
     else
-        batch_size=16
+        batch_size=4
     fi
     
     english_datasets=(mutual dstc7 empchat dailydialog personachat)

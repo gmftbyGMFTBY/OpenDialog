@@ -753,6 +753,7 @@ class BERTMCDataset(Dataset):
         else:
             for context, response in tqdm(d_):
                 context_id = self.vocab.encode(context)
+                # delete the [CLS] token of the response sequence for combining
                 ids = [context_id + self.vocab.encode(r)[1:] for r in response]
                 bundle = dict()
                 bundle['ids'] = ids
