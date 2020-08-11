@@ -57,9 +57,9 @@ elif [ $mode = 'train' ]; then
         --dataset $dataset \
         --model $model \
         --mode train \
-        --batch_size 8 \
+        --batch_size 64 \
         --n_vocab 70000 \
-        --epoch 5 \
+        --epoch 50 \
         --seed 30 \
         --src_len_size 512 \
         --tgt_len_size 20 \

@@ -24,7 +24,8 @@ Elasticsearch save the retrieval and generative responses, q-a match and q-q mat
 '''
 
 retrieval_datasets = ['ECG', 'zhihu', 'zhidao', 'kgdialog', 'kdconv', 'zh50w', 'doubangroup']
-generative_datasets = ['zhihu', 'kgdialog', 'kdconv', 'zh50w', 'xiaohuangji', 'doubangroup']
+# do not use zhihu dataset for generative dialog, which leads to the long but nonsense generated results
+generative_datasets = ['kgdialog', 'kdconv', 'zh50w', 'xiaohuangji', 'doubangroup']
 
 single_turn = ['ECG', 'zhihu', 'xiaohuangji', 'zhidao', 'weibo400w', 'qingyun11w', 'ptt', 'doubangroup']
 multi_turn = ['kgdialog', 'kdconv', 'zh50w', 'douban300w']

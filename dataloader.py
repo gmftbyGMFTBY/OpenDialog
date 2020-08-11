@@ -720,13 +720,17 @@ class BERTMCDataset(Dataset):
         responses = [i[1] for i in data]
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
         
-        self.pp_path = f'{os.path.splitext(path)[0]}_{model_type}.pkl'
+        if evaluation:
+            self.pp_path = f'{os.path.splitext(path)[0]}_{model_type}_evaluation.pkl'
+        else:
+            self.pp_path = f'{os.path.splitext(path)[0]}_{model_type}.pkl'
         if os.path.exists(self.pp_path):
             with open(self.pp_path, 'rb') as f:
                 self.data = pickle.load(f)
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
         self.data, d_ = [], []
+        
         for i in tqdm(data):
             context, response = i[0], i[1]
             negative = generate_negative_samples(response, responses, samples=samples)

@@ -7,6 +7,7 @@ from .nli import *
 from .diversity import *
 from .mmi import *
 from .bert_multiview import *
+from .bertmc import *
 
 class MultiView(nn.Module):
     
@@ -28,10 +29,11 @@ class MultiView(nn.Module):
 
     def __init__(self, nli=False, coherence=False, length=False,
                  logic=False, topic=False, fluency=False, nidf_tf=False,
-                 repetition_penalty=False, distinct=False, 
+                 repetition_penalty=False, distinct=False, bertmcf=False,
                  mmi=False, coherence_path=None, nli_path=None, 
                  logic_path=None, topic_path=None, mmi_path=None,
-                 fluency_path=None, bertmultiview=None, bertmultiview_path=None):
+                 bertmcf_path=None, fluency_path=None, 
+                 bertmultiview=None, bertmultiview_path=None):
         super(MultiView, self).__init__()
         self.mode = {
                 'bertmultiview': bertmultiview,
@@ -45,6 +47,7 @@ class MultiView(nn.Module):
                 'nidf_tf': nidf_tf,
                 'mmi': mmi,
                 'repetition_penalty': repetition_penalty,
+                'bertmcf': bertmcf,
         }
         self.mode_weight = {
                 'bertmultiview': 1,
@@ -55,7 +58,8 @@ class MultiView(nn.Module):
                 'nidf_tf': 0.6,
                 'mmi': 0.5,
                 'distinct': 0.6,
-                'repetition_penalty': 0.2}
+                'repetition_penalty': 0.2,
+                'bertmcf': 1}
         self.topic_map = {'电影': 'movie', '美食': 'food', '数码产品': 'electric', '音乐': 'music', '体育': 'sport'}
         # load sub-models
         self.model = {}
@@ -64,7 +68,8 @@ class MultiView(nn.Module):
                 (coherence and not coherence_path) or \
                 (fluency and not fluency_path) or \
                 (logic and not logic_path) or \
-                (bertmultiview and not bertmultiview_path):
+                (bertmultiview and not bertmultiview_path) or \
+                (bertmcf and not bertmcf_path):
             raise Exception(f'[!] essential path is not found')
         for k, v in self.mode.items():
             if not v:
@@ -99,6 +104,9 @@ class MultiView(nn.Module):
                 elif k == 'bertmultiview':
                     self.model['bertmultiview'] = BERT_MULTIVIEW()
                     self.model['bertmultiview'].load_model(bertmultiview_path)
+                elif k == 'bertmcf':
+                    self.model['bertmcf'] = BERTMCF()
+                    self.model['bertmcf'].load_model(bertmcf_path)
         print(f'[!] init the multview module over, available models are shown as follows:')
         # show the available models
         for k, v in self.mode.items():
@@ -126,7 +134,7 @@ class MultiView(nn.Module):
                 return False
 
     @torch.no_grad()
-    def forward(self, context, response, topic=None, history=None, bertmultiview_details=False):
+    def forward(self, context, response, groundtruth=None, topic=None, history=None, bertmultiview_details=False):
         '''
         context: the string of the conversation context
         response: the string of the responses
@@ -162,6 +170,9 @@ class MultiView(nn.Module):
                 scores[k] = self.model[k].scores(response, history)
             elif k in ['bertmultiview']:
                 scores[k] = self.model[k].scores(context, response, details=bertmultiview_details)    # [list]
+            elif k in ['bertmcf']:
+                assert groundtruth is not None, 'bertmcf must use the groundtruth'
+                scores[k] = self.model[k].scores(context, groundtruth, response)
             else:
                 scores[k] = self.model[k].scores(context, response)    # [list]
         average_scores = []    # [batch]
@@ -172,24 +183,66 @@ class MultiView(nn.Module):
             for idx in range(batch_size):
                 average_scores.append(np.sum([v[idx] * self.mode_weight[key] for key, v in scores.items()]))
             return average_scores, scores
+        
+# ========= test the evaluation of the generated responses =========
+def read_evaluation_data(path):
+    dataset = []
+    with open(path) as f:
+        data = f.read().split('\n\n')
+        for dialog in tqdm(data):
+            dialog = dialog.strip()
+            if not dialog:
+                continue
+            context, target, candidate = dialog.split('\n')
+            context = context[5:].strip('[CLS]').strip('[SEP]').split('[SEP]')
+            context = ' [SEP] '.join(context).strip()
+            
+            target = target[5:].strip('[CLS]').strip('[SEP]').strip()
+            candidate = candidate[5:].strip('[CLS]').strip('[SEP]').strip()
+            dataset.append((context, target, candidate))
+    return dataset
+
+def collect_results(path, model, dataset, batch_size=32):
+    '''
+    only for bertmcf model in multiview
+    '''
+    with open(path, 'w') as f:
+        for i in tqdm(range(0, len(dataset), batch_size)):
+            batch = dataset[i:i+batch_size]
+            contexts = [i[0] for i in batch]
+            groundtruths = [i[1] for i in batch]
+            candidates = [i[2] for i in batch]
+            rest = model(contexts, candidates, groundtruth=groundtruths)
+            rest = rest[1]['bertmcf']
+            for c, g, ca, s in zip(contexts, groundtruths, candidates, rest):
+                f.write(f'[Context]: {c}\n[Groundtruth]: {g}\n[Candidate]: {ca}\n[Score]: {s}\n\n')
+    print(f'[!] write the results into {path}')
 
 if __name__ == "__main__":
+    # CUDA_VISIBLE_DEVICES=0 python -m multiview.multiviews
     model = MultiView(
                 topic=False,
-                coherence=True,
+                coherence=False,
                 length=False,
                 nidf_tf=False,
                 fluency=False,
                 repetition_penalty=False,
                 mmi=False,
                 distinct=False,
-                bertmultiview=True,
+                bertmultiview=False,
+                bertmcf=True,
+                bertmcf_path='ckpt/zh50w/bertmcf/best.pt',
                 bertmultiview_path='ckpt/zh50w/bertretrieval_multiview/best.pt',
                 mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
                 coherence_path='ckpt/zh50w/bertretrieval/best.pt',
                 topic_path='ckpt/fasttext/model.bin',
-                fluency_path='ckpt/LM/gpt2lm/best.pt',)
+                fluency_path='ckpt/LM/gpt2lm/best.pt',
+    )
+    
+    dataset = read_evaluation_data('rest/train_generative/gpt2/rest.txt')
+    collect_results('multiview/evaluation_rest.txt', model, dataset)
 
+    '''
     responses = [
             '哈哈哈',
             '我比较喜欢泰坦尼克号这种类型的',
@@ -208,10 +261,12 @@ if __name__ == "__main__":
             '我不喜欢我不喜欢电影',
             '我' * 500,
             ]
+    groundtruths = ['我比较喜欢看科幻片，可以激发我无尽的想象'] * len(responses)
     # test the performance of the multiview metric
     contexts = ['你喜欢什么类型的电影呢'] * len(responses)
     topic = ['movie'] * len(responses) 
     history = ['来分享你最近看过的电影吧', '我最近看了一部恐怖片', '你难道喜欢看恐怖片么']
 
-    rest = model(contexts, responses, topic=topic, history=history, bertmultiview_details=False)
+    rest = model(contexts, responses, groundtruth=groundtruths, topic=topic, history=history, bertmultiview_details=False)
     pprint.pprint(rest)
+    '''

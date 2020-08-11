@@ -7,6 +7,7 @@ from models.bert_retrieval import BERTRetrieval
 from models.bert_retrieval_multi import BERTMULTIVIEW
 from models.gpt2 import GPT2
 from models.base import RetrievalBaseAgent, BaseAgent
+from models.bert_mc import BERTMCFusion
 import fasttext.FastText as ff
 import argparse
 import numpy as np

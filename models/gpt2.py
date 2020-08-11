@@ -121,7 +121,7 @@ class GPT2Agent(BaseAgent):
                 'min_lr': 1e-5,
                 'warmup_steps': 2000,
                 'total_steps': total_steps,
-                'topk': 20,
+                'topk': 10000,
                 'topp': 1.0, 
                 'config_path': 'data/config/model_config_dialogue_big.json',
                 'multi_gpu': self.gpu_ids,
@@ -139,6 +139,7 @@ class GPT2Agent(BaseAgent):
         self.unk = self.vocab.convert_tokens_to_ids('[UNK]')
         self.sep = self.vocab.convert_tokens_to_ids('[SEP]')
         self.cls = self.vocab.convert_tokens_to_ids('[CLS]')
+        self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
 
         self.model = GPT2(
                 self.vocab_size, 
@@ -175,7 +176,7 @@ class GPT2Agent(BaseAgent):
             #         dim=0)
         
         # run_mode == 'chatbot', use the bertretrieval for reranking
-        if run_mode in ['rerank', 'rerank_ir']:
+        if run_mode in ['test', 'rerank', 'rerank_ir']:
             '''
             from multiview import MultiView
             print(f'[!] MultiView reranker model will be initized')
@@ -199,15 +200,15 @@ class GPT2Agent(BaseAgent):
             from .bert_retrieval import BERTRetrievalAgent
             # self.reranker = BERTRetrievalAgent(multi_gpu, kb=False)
             # self.reranker.load_model('ckpt/zh50w/bertretrieval/best.pt')
-            self.reranker = BERTMCAgent(multi_gpu, kb=False)
-            self.reranker.load_model('ckpt/zh50w/bertmc/best.pt', mode_type='mc')
+            self.reranker = BERTMCAgent(multi_gpu, kb=False, model_type='mc')
+            self.reranker.load_model('ckpt/zh50w/bertmc/best.pt')
 
         if run_mode == 'rerank_ir':
             self.ir_agent = TestAgent()
 
         self.show_parameters(self.args)
 
-    def train_model(self, train_iter, mode='train', recoder=None):
+    def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
         self.model.train()
         total_loss, total_acc, batch_num = 0, [], 0
         pbar = tqdm(train_iter)
@@ -232,7 +233,7 @@ class GPT2Agent(BaseAgent):
                 correct = correct.float().sum()
                 # loss and token accuracy
                 accuracy = correct / num_targets
-                total_acc.append(accuracy)
+                total_acc.append(accuracy.item())
                 loss = loss / num_targets
                 
                 if mode == 'train':
@@ -242,6 +243,11 @@ class GPT2Agent(BaseAgent):
                     self.warmup_scheduler.step()
                 total_loss += loss.item()
                 batch_num += 1
+                
+                recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
+                recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
+                recoder.add_scalar(f'train-epoch-{idx_}/RunTokenAcc', accuracy, idx)
+                recoder.add_scalar(f'train-epoch-{idx_}/TokenAcc', np.mean(total_acc), idx)
 
                 pbar.set_description(f'[!] OOM: {oom_time}, train loss: {round(loss.item(), 4)}, token acc: {round(accuracy.item(), 4)}')
         except RuntimeError as exception:
@@ -255,6 +261,7 @@ class GPT2Agent(BaseAgent):
     def test_model_samples(self, test_iter, path, samples=5):
         '''
         Generate `samples` candidates for one given conversation context
+        batch_size is 1
         '''
         def filter(x):
             if '[SEP]' in x:
@@ -317,8 +324,9 @@ class GPT2Agent(BaseAgent):
         print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Length(max, min, avg): {c_max_l}/{c_min_l}/{c_avg_l}|{r_max_l}/{r_min_l}/{r_avg_l}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
 
     @torch.no_grad()
-    def test_model_rerank(self, test_iter, path, beam_size=16):
+    def test_model_rerank(self, test_iter, path, beam_size=8):
         '''
+        For reranking the generated samples
         Generate the test dataset and measure the performance
         Batch size must be 1; default runing batch size (beam search size) is 16
         '''
@@ -328,7 +336,6 @@ class GPT2Agent(BaseAgent):
         pbar = tqdm(test_iter)
         with open(path, 'w') as f:
             for batch in pbar:
-                ipdb.set_trace()
                 c, r = batch    # [S]
                 c_ = [deepcopy(c) for _ in range(beam_size)]
                 c_ = torch.stack(c_)    # [B, S]
@@ -336,16 +343,17 @@ class GPT2Agent(BaseAgent):
                 max_size = max(len(r), self.args['tgt_len_size'])
                 tgt = self.model.predict_batch(c_, max_size)
                 
-                # convert tgt to batch [B(beam_size), S]
-                tgt_ = to_cuda(torch.stack([torch.LongTensor(i) for i in tgt]))    # [B, S]
+                # cut from the first [SEP] token
+                tgt = [i[:i.index(self.sep)+1] if self.sep in i else i for i in tgt]
+                tgt = to_cuda(pad_sequence([torch.LongTensor(i) for i in tgt], batch_first=True, padding_value=self.pad))    # [B, S]
                 
                 # rerank procedure
-                index = self.reranker.predict(c_, tgt_)
+                index = self.reranker.predict(c_, tgt)
                 tgt = tgt[index]
                 
                 # ids to tokens
                 text = self.vocab.convert_ids_to_tokens(tgt)
-                tgt = ''.join(text)
+                tgt = '[CLS]' + filter(''.join(text))
 
                 ctx = self.vocab.convert_ids_to_tokens(c)
                 ctx = filter(''.join(ctx))
@@ -356,6 +364,7 @@ class GPT2Agent(BaseAgent):
                 f.write(f'CTX: {ctx}\n')
                 f.write(f'REF: {ref}\n')
                 f.write(f'TGT: {tgt}\n\n')
+                f.flush()
         print(f'[!] translate test dataset over, write into {path}')
         # measure the performance
         (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])

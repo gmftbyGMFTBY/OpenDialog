@@ -1,7 +1,7 @@
 from .header import *
 
 '''
-BertForMultipleChoice
+BertForMultipleChoice; use self-attention mechanism to compare with the other candidates
 '''
 
 class BERTMC(nn.Module):
@@ -138,13 +138,41 @@ class BERTMCAgent(RetrievalBaseAgent):
     
     @torch.no_grad()
     def predict(self, src, tgt):
+        '''
+        For generation rerank
+        '''
         # src/tgt: [B, S] -> [1, B(N), S_c+S_r]
         batch = torch.cat([src, tgt], dim=1)    # [B, S]
         batch = batch.unsqueeze(0)    # [1, N, S]
         rest = self.model(batch).squeeze(0)    # [N]
-        rest = F.softmax(rest)    # [N]
+        rest = F.softmax(rest, dim=0)    # [N]
         index = torch.argmax(rest).item()
         return index
+    
+    @torch.no_grad()
+    def test_model_evaluation(self, test_iter, path):
+        '''
+        For better automatic evaluation
+        Use the groundtruth for comparsion (groundtruth)
+        
+        Parameters
+        :cid: [B, N, S]; N=2 (one is groundtruth, one is generated candidate)
+        :context: [B] string
+        :groundtruth: [B] string
+        :candidate: [B] string
+        '''
+        self.model.eval()
+        pbar = tqdm(test_iter)
+        with open(path, 'w') as f:
+            for batch in pbar:
+                ipdb.set_trace()
+                cid, context, groundtruth, candidate = batch
+                output = self.model(cid)    # [B, N]
+                output = F.softmax(output, dim=-1)    # [B, N]
+                scores = output[:, 1].tolist()    # [B]; scores range from 0 to 1, which represent the quality of the candidate
+                for c, g, ca, s in zip(context, groundtruth, candidate, scores):
+                    f.write(f'[Context]: {c}\n[Goundtruth]: {g}\n[Candidate]: {ca}\n[Score]: {round(s)}\n\n')
+        print(f'[!] write all the evaluation scores into {path}')
     
     @torch.no_grad()
     def test_model(self, test_iter, path):
