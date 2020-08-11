@@ -189,21 +189,18 @@ def bert_ir_mc_collate_fn(batch):
         ctx, label = ctx.cuda(), label.cuda()
     return ctx, label
 
-'''
-def bert_ir_mc_evaluation_collate_fn(batch):
-    context, groundtruth, candidate = [], [], []
-    cid = []
+def bert_ir_mc_test_collate_fn(batch):
+    '''input: B*N*S, return: [B, N, S]
+    for test mode: N=10; for train mode: N=2
+    '''
+    ctx = []    # [B*N], [B]
     for i in batch:
-        cid.extend([torch.LongTensor(k) for k in i['ids']])
-        context.append(i['context'])
-        groundtruth.append(i['groundtruth'])
-        candidate.append(i['candidate'])
-    cid = pad_sequence(cid, batch_first=True, padding_value=0)
-    cid = torch.stack(cid.split(2))    # [B, 2, S]
+        ctx.extend(i)
+    ctx = pad_sequence(ctx, batch_first=True, padding_value=0)    # [B*N, S]
+    ctx = torch.stack(ctx.split(10))    # [B, N, S]
     if torch.cuda.is_available():
-        cid = cid.cuda()
-    return cid, context, groundtruth, candidate
-'''
+        ctx = ctx.cuda()
+    return ctx
 
 def bert_ir_dis_train_collate_fn(batch):
     pad = 0

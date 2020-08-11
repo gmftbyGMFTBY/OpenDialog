@@ -131,23 +131,14 @@ def load_bert_ir_dis_dataset(args):
 def load_bert_ir_mc_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     samples = 1 if args['mode'] == 'train' else 9
-    data = BERTMCDataset(path, mode=args['mode'], samples=samples, max_len=512)
-    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_mc_collate_fn)
+    data = BERTMCDataset(path, mode=args['mode'], samples=samples, max_len=512, harder=False)
+    if args['mode'] in ['train', 'dev']:
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_mc_collate_fn)
+    else:
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_mc_test_collate_fn)
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     return iter_
-
-'''
-def load_bert_ir_mc_evaluation_dataset(args):
-    # GPT2 model's generation
-    path = f'rest/{args["dataset"]}/gpt2/rest.txt'
-    samples = 1
-    data = BERTMCDataset(path, mode=args['mode'], samples=samples, max_len=512, evaluation=True)
-    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_mc_evaluation_collate_fn)
-    if not os.path.exists(data.pp_path):
-        data.save_pickle()
-    return iter_
-'''
 
 def load_bert_ir_multi_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'

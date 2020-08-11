@@ -67,6 +67,13 @@ def generate_negative_samples(r, responses, samples=10):
         negative = random.sample(responses, samples)
     return negative
 
+def generate_negative_samples_harder(r, responses, samples=10, bm25model=None):
+    rest = bm25model.search(None, r, samples=samples)
+    if r in rest:
+        rest.remove(r)
+        rest.append(random.sample(response, 1))
+    return rest
+
 def generate_negative_samples_naturalness(responses, pool_size=64, samples=10, lang='zh', bm25Model=None):
     '''
     Query-Answer matching: find the responses that have the similar topic with the query
@@ -81,7 +88,11 @@ def generate_negative_samples_naturalness(responses, pool_size=64, samples=10, l
         p = list(set(p))
         if r in p:
             p.remove(r)
-        rest_.append(p[:samples])
+        if len(p) >= samples:
+            rest_.append(p[:samples])
+        else:
+            p.extend(random.sample(responses, samples - len(p)))
+            rest_.append(p[:samples])
     return rest_
 
 def generate_negative_samples_relatedness(responses, samples=10, pool_size=64, w2v=None, bm25Model=None, embedding_function=None):

@@ -713,15 +713,15 @@ class BERTMCDataset(Dataset):
     
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
                  max_len=300, samples=1, vocab_file='data/vocab/vocab_small', 
-                 model_type='mc'):
+                 model_type='mc', harder=False):
         self.mode = mode
         self.max_len = max_len 
         data = read_text_data(path)
         responses = [i[1] for i in data]
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
         
-        if evaluation:
-            self.pp_path = f'{os.path.splitext(path)[0]}_{model_type}_evaluation.pkl'
+        if mode == 'test':
+            self.pp_path = f'{os.path.splitext(path)[0]}_overall.pkl'
         else:
             self.pp_path = f'{os.path.splitext(path)[0]}_{model_type}.pkl'
         if os.path.exists(self.pp_path):
@@ -758,10 +758,11 @@ class BERTMCDataset(Dataset):
             for context, response in tqdm(d_):
                 context_id = self.vocab.encode(context)
                 # delete the [CLS] token of the response sequence for combining
-                ids = [context_id + self.vocab.encode(r)[1:] for r in response]
+                ids = [self.vocab.encode(r) for r in response]
                 bundle = dict()
-                bundle['ids'] = ids
-                bundle['label'] = 0
+                bundle['context_id'] = context_id
+                bundle['reply_id'] = ids
+                bundle['label'] = [1] + [0] * samples
                 self.data.append(bundle)
                 
     def __len__(self):
@@ -769,7 +770,14 @@ class BERTMCDataset(Dataset):
 
     def __getitem__(self, i):
         bundle = self.data[i]
-        return bundle
+        if self.mode in ['train', 'dev']:
+            return bundle
+        else:
+            ids = []
+            for i in range(len(bundle['reply_id'])):
+                p = bundle['context_id'] + bundle['reply_id'][i][1:]
+                ids.append(torch.LongTensor(p[-self.max_len:]))
+            return ids
     
     def save_pickle(self):
         with open(self.pp_path, 'wb') as f:
@@ -797,7 +805,7 @@ class BERTIRDataset(Dataset):
 
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
                  turn_size=3, max_len=300, samples=9, vocab_file='data/vocab/vocab_small',
-                 negative_aspect='coherence', reduce=False, reduce_num=50000):
+                 negative_aspect='overall'):
         self.mode = mode
         self.max_len = max_len 
         # data = read_csv_data(path)
@@ -813,89 +821,54 @@ class BERTIRDataset(Dataset):
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
         self.data = []
-
+        
         # collect the data samples
         d_ = []
-        if negative_aspect == 'diversity':
-            # PROCESS ALL THE DATASET AND FIND THE TOP-10000 in-diversity samnples
-            diversity_path = f'{os.path.split(path)[0]}/diversity_scores.pkl'
-            if os.path.exists(diversity_path):
-                with open(diversity_path, 'rb') as f:
-                    diversity_scores, responses_ = pickle.load(f)
-                print(f'[!] load pre-trained diversity scores')
-            else:
-                NIDF = NIDF_TF()
-                responses_ = random.sample(responses, 50000)
-                idx, bsz_diveristy, diversity_scores = 0, 512, []
-                with tqdm(total=len(responses_)) as pbar:
-                    while idx < len(responses_):
-                        samples_ = responses_[idx:idx+bsz_diveristy]
-                        bsz_ = len(samples_)
-                        diversity_scores.extend(NIDF.scores(samples_, topk=5))
-                        pbar.update(bsz_)
-                        idx += bsz_
-                with open(diversity_path, 'wb') as f:
-                    pickle.dump((diversity_scores, responses_), f)
-                print(f'[!] save the pre-trained diversity scores into {diversity_path}')
-            sort_index = np.argsort(diversity_scores)[:1000]
-            diversity_negative = [responses_[i] for i in sort_index]
-        elif negative_aspect == 'fluency':
-            vocab_path = f'{os.path.split(path)[0]}/fluency_vocab.pkl'
-            if os.path.exists(vocab_path):
-                with open(vocab_path, 'rb') as f:
-                    vocabs = pickle.load(f)
-                print('[!] load preprosed vocab file for fluency perturbation')
-            else:
-                print(f'[!] begin to collect the vocabs for the fluency perturbation')
-                vocabs = make_vocabs(responses)
-                with open(vocab_path, 'wb') as f:
-                    pickle.dump(vocabs, f)
-                print(f'[!] save the vocabs in {vocab_path}')
-        elif negative_aspect in ['relatedness', 'naturalness']:
-            eschator = ESChat('zh50w_database', kb=False)
-            if negative_aspect == 'relatedness':
-                w2v = load_w2v('data/chinese_w2v')
-        elif negative_aspect in ['coherence', 'overall']:
-            pass
-        else:
-            raise Exception(f'[!] got unknow negative aspect {negative_aspect}')
-            
-        # reduce for fine tuning
-        if reduce:
-            random_idx = random.sample(range(len(data)), reduce_num)
-            data = [data[i] for i in random_idx]
-            
-        if negative_aspect in ['naturalness', 'relatedness']:
-            # too slow, use multisearch for speeding up
-            with tqdm(total=len(data)) as pbar:
-                idx, bsz = 0, 128
-                while idx < len(data):
-                    items = data[idx:idx+bsz]
-                    bsz_ = len(items)
-                    contexts_, responses_ = [i[0] for i in items], [i[1] for i in items]
-                    if negative_aspect == 'naturalness':
-                        negatives = generate_negative_samples_naturalness(contexts_, samples=samples, bm25Model=eschator, pool_size=128)
-                    elif negative_aspect == 'relatedness':
-                        # or "Semantic relatedness"
-                        negatives = generate_negative_samples_relatedness(contexts_, samples=samples, bm25Model=eschator, pool_size=64, w2v=w2v, embedding_function=convert_text_embedding)
-                    idx += bsz_
+        self.prepare_diversity(path)
+        self.prepare_fluency(path)
+        self.prepare_bm25('naturalness')
+        self.prepare_bm25('relatedness')
+        print(f'[!] prepare over')
+          
+        with tqdm(total=len(data)) as pbar:
+            idx, bsz = 0, 128
+            while idx < len(data):
+                items = data[idx:idx+bsz]
+                bsz_ = len(items)
+                contexts_, responses_ = [i[0] for i in items], [i[1] for i in items]
+                ran = random.random()
+                if negative_aspect == 'coherence':
+                    ran = 0
+                if ran < 0.2: 
+                    # coherence
+                    for c, response in zip(contexts_, responses_):
+                        negative = generate_negative_samples(response, responses, samples=samples)
+                        d_.append((c, response, negative, 'coherence'))
+                elif 0.2 <= ran < 0.4:
+                    # fluency
+                    for c, response in zip(contexts_, responses_):
+                        negative = generate_negative_samples_fluency(response, samples=samples, vocab=self.vocabs)
+                        d_.append((c, response, negative, 'fluency'))
+                elif 0.4 <= ran < 0.6:
+                    # diversity
+                    for c, response in zip(contexts_, responses_):
+                        negative = generate_negative_samples_diversity(response, self.diversity_negative, samples=samples)
+                        d_.append((c, response, negative, 'diveristy'))
+                elif 0.6 <= ran < 0.8:
+                    # naturalness
+                    negatives = generate_negative_samples_naturalness(contexts_, samples=samples, bm25Model=self.eschator, pool_size=128)
                     for c, r, n in zip(contexts_, responses_, negatives):
-                        d_.append((c, [r] + n))
-                    pbar.update(bsz_)
-        else:
-            for i in tqdm(data):
-                context, response = i[0], i[1]
-                if negative_aspect in ['coherence', 'overall']:
-                    negative = generate_negative_samples(response, responses, samples=samples)
-                elif negative_aspect == 'fluency':
-                    negative = generate_negative_samples_fluency(response, samples=samples, vocab=vocabs)
-                elif negative_aspect == 'diversity':
-                    negative = generate_negative_samples_diversity(response, diversity_negative, samples=samples)
+                        d_.append((c, r, n, 'naturalness'))
+                elif 0.8 <= ran < 1.0:
+                    # relatedness
+                    negatives = generate_negative_samples_relatedness(contexts_, samples=samples, bm25Model=self.eschator, pool_size=64, w2v=self.w2v, embedding_function=convert_text_embedding)
+                    for c, r, n in zip(contexts_, responses_, negatives):
+                        d_.append((c, r, n, 'relatedness'))
                 else:
-                    raise Exception(f'[!] got unkonow negative aspect {negative_aspect}')
-                d_.append((context, [response] + negative))
-        print(f'[!] collect the dataset over, prepare to process them')
-
+                    pass
+                idx += bsz_
+                pbar.update(bsz_)
+        
         if mode in ['train', 'dev']:
             # concatenate the context and the response
             for context, response in tqdm(d_):
@@ -906,8 +879,6 @@ class BERTIRDataset(Dataset):
                     bundle['context_id'] = context_id + rid[1:]
                     bundle['label'] = 1 if idx == 0 else 0
                     self.data.append(bundle)
-            # NOTE:
-            self.data = sorted(self.data, key=lambda x: len(x['context_id']))
         else:
             for item in tqdm(d_):
                 context, response = item
@@ -918,6 +889,48 @@ class BERTIRDataset(Dataset):
                 bundle['reply_id'] = res_ids
                 bundle['label'] = [1] + [0] * samples
                 self.data.append(bundle)
+    
+    def prepare_diversity(self, path):
+        # PROCESS ALL THE DATASET AND FIND THE TOP-10000 in-diversity samnples
+        diversity_path = f'{os.path.split(path)[0]}/diversity_scores.pkl'
+        if os.path.exists(diversity_path):
+            with open(diversity_path, 'rb') as f:
+                diversity_scores, responses_ = pickle.load(f)
+            print(f'[!] load pre-trained diversity scores')
+        else:
+            NIDF = NIDF_TF()
+            responses_ = random.sample(responses, 50000)
+            idx, bsz_diveristy, diversity_scores = 0, 512, []
+            with tqdm(total=len(responses_)) as pbar:
+                while idx < len(responses_):
+                    samples_ = responses_[idx:idx+bsz_diveristy]
+                    bsz_ = len(samples_)
+                    diversity_scores.extend(NIDF.scores(samples_, topk=5))
+                    pbar.update(bsz_)
+                    idx += bsz_
+            with open(diversity_path, 'wb') as f:
+                pickle.dump((diversity_scores, responses_), f)
+            print(f'[!] save the pre-trained diversity scores into {diversity_path}')
+        sort_index = np.argsort(diversity_scores)[:1000]
+        self.diversity_negative = [responses_[i] for i in sort_index]
+        
+    def prepare_fluency(self, path):
+        vocab_path = f'{os.path.split(path)[0]}/fluency_vocab.pkl'
+        if os.path.exists(vocab_path):
+            with open(vocab_path, 'rb') as f:
+                self.vocabs = pickle.load(f)
+            print('[!] load preprosed vocab file for fluency perturbation')
+        else:
+            print(f'[!] begin to collect the vocabs for the fluency perturbation')
+            self.vocabs = make_vocabs(responses)
+            with open(vocab_path, 'wb') as f:
+                pickle.dump(self.vocabs, f)
+            print(f'[!] save the vocabs in {vocab_path}')
+            
+    def prepare_bm25(self, negative_aspect):
+        self.eschator = ESChat('zh50w_database', kb=False)
+        if negative_aspect == 'relatedness':
+            self.w2v = load_w2v('data/chinese_w2v')
 
     def __len__(self):
         return len(self.data)

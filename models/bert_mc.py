@@ -180,7 +180,7 @@ class BERTMCAgent(RetrievalBaseAgent):
         pbar = tqdm(test_iter)
         rest = []
         for idx, batch in enumerate(pbar):
-            cid, label = batch    # [B, N(10), S], [B]
+            cid = batch    # [B, N(10), S], [B]
             output = self.model(cid)    # [B, N]
             output = F.softmax(output, dim=-1)    # [B, N]
             preds = [i.tolist() for i in output]    # [B]
