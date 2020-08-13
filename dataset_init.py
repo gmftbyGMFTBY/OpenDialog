@@ -165,10 +165,10 @@ def load_bert_ir_cl_dataset(args):
 def load_bert_ir_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:
-        data = BERTIRDataset(path, mode=args['mode'], samples=1, negative_aspect='overall')
+        data = BERTIRDataset(path, mode=args['mode'], samples=1, negative_aspect='coherence')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
     else:
-        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='overall')
+        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='hard')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)
     if not os.path.exists(data.pp_path):
         data.save_pickle()

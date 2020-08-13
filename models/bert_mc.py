@@ -48,10 +48,10 @@ class BERTMCFusion(nn.Module):
             input_ids=inpt,
             attention_mask=attn_mask,
         )
-        # NOTE: [CLS] token is better ?
-        # logits = output[1]    # [B*N, 768]
-        logits = output[0]    # [B, N, 768]
-        logits = logits.mean(dim=1)    # [B*N, 768]
+        logits = output[1]    # [B*N, 768]
+        # logits = output[0]    # [B, N, 768]
+        # logits = logits.mean(dim=1)    # [B*N, 768]
+        
         logits = torch.stack(logits.split(num_choices))    # [B, N, 768]
         logits_ = self.fusion(logits.transpose(0, 1)).transpose(0, 1)    # [B, N, 768]
         opt = torch.cat([logits, logits_], dim=2)    # [B, N, 768*2]
@@ -77,7 +77,7 @@ class BERTMCAgent(RetrievalBaseAgent):
             'pad': 0,
             'dropout': 0.1,
             'num_layer': 1,
-            'nhead': 1,    # NOTE:
+            'nhead': 2,    # NOTE:
             'model': 'bert-base-chinese',
             'model_type': model_type,
         }
@@ -134,6 +134,7 @@ class BERTMCAgent(RetrievalBaseAgent):
             recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', now_correct/len(label), idx)
 
             pbar.set_description(f'[!] loss: {round(loss.item(), 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
+        recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
         return round(total_loss / batch_num, 4)
     
     @torch.no_grad()

@@ -67,14 +67,11 @@ def load_dataset(args):
         raise Exception(f'[!] got unknow model: {args["model"]}')
 
 def main(**args):
+    # remove these 4 lines into 'train'
     backup_mode = args['mode']
     args['mode'] = 'train'
     train_iter = load_dataset(args)
     args['mode'] = backup_mode
-
-    # tensorboard summarywriter
-    if args['mode'] == 'train':
-        sum_writer = SummaryWriter(log_dir=f'rest/{args["dataset"]}/{args["model"]}')
 
     agent_map = {
         'DualLSTM': DualLSTMAgent, 
@@ -103,6 +100,7 @@ def main(**args):
     agent = agent_map[args['model']](*parameter_map, **parameter_key)
 
     if args['mode'] == 'train':
+        sum_writer = SummaryWriter(log_dir=f'rest/{args["dataset"]}/{args["model"]}')
         if args['curriculum']:
             # 1. collect the loss for resetting the order (bertretrieval model)
             train_iter.forLoss = True

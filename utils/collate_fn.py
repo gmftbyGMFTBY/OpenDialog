@@ -177,11 +177,20 @@ def bert_ir_mc_collate_fn(batch):
     '''input: B*N*S, return: [B, N, S]
     for test mode: N=10; for train mode: N=2
     '''
-    ctx, label = [], []    # [B*N], [B]
+    ctx_, label = [], []    # [B*N], [B]
     N = len(batch[0]['ids'])
     for i in batch:
         label.append(i['label'])
-        ctx.extend([torch.LongTensor(k) for k in i['ids']])
+        ctx_.append([torch.LongTensor(k) for k in i['ids']])
+    
+    # shuffle the samples in the batch
+    random_idx = list(range(len(ctx_)))
+    random.shuffle(random_idx)
+    ctx = []
+    for i in random_idx:
+        ctx.extend(ctx_[i])
+    label = [label[i] for i in random_idx]
+    
     ctx = pad_sequence(ctx, batch_first=True, padding_value=0)    # [B*N, S]
     ctx = torch.stack(ctx.split(N))    # [B, N, S]
     label = torch.tensor(label, dtype=torch.long)    # [B]

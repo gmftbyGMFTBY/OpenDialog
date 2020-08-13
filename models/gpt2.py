@@ -133,7 +133,8 @@ class GPT2Agent(BaseAgent):
                 'repetition_penalty': 1,
         }
         # hyperparameters
-
+        
+        # self.vocab = BertTokenizer.from_pretrained('/home/lt/data/GPT2_LCCC_base/')
         self.vocab = BertTokenizer(vocab_file=self.args['vocab_file'])
         self.vocab_size = len(self.vocab)
         self.unk = self.vocab.convert_tokens_to_ids('[UNK]')
@@ -150,7 +151,7 @@ class GPT2Agent(BaseAgent):
                 self.args['repetition_penalty'],
                 config_path=self.args['config_path']
         )
-
+        
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.args['pad'], reduction='sum')
         self.optimizer = transformers.AdamW(
                 self.model.parameters(), 
