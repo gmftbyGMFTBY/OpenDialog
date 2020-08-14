@@ -36,6 +36,7 @@ elif [ $mode = 'backup' ]; then
     cp ckpt/$dataset/$model/param.txt bak/$dataset/$model/
     cp ckpt/$dataset/$model/best.pt bak/$dataset/$model/
     cp rest/$dataset/$model/rest.txt bak/$dataset/$model/
+    cp rest/$dataset/$model/events* bak/$dataset/$model/
 elif [ $mode = 'irdata' ]; then
     python utils.py \
         --dataset $dataset \
@@ -59,7 +60,7 @@ elif [ $mode = 'train' ]; then
         --mode train \
         --batch_size 12 \
         --n_vocab 70000 \
-        --epoch 5 \
+        --epoch 20 \
         --seed 30 \
         --src_len_size 512 \
         --tgt_len_size 20 \

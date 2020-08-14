@@ -336,7 +336,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             recoder.add_scalar(f'train-epoch-{idx_}/Acc', correct/s, idx)
             recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', now_correct/len(label), idx)
 
-            pbar.set_description(f'[!] batch: {batch_num}; train loss: {round(loss.item(), 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
+            pbar.set_description(f'[!] train loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
         print(f'[!] overall acc: {round(correct/s, 4)}')
         recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
         return round(total_loss / batch_num, 4)
