@@ -295,18 +295,29 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         # hyperparameters
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         self.model = BERTRetrieval(self.args['model'])
+        
+        # before DDP
+        # self.model = convert_syncbn_model(self.model)
+        
         if torch.cuda.is_available():
             self.model.cuda()
-        self.model = DataParallel(self.model, device_ids=self.gpu_ids)
-        # bert model is too big, try to use the DataParallel
         self.optimizer = transformers.AdamW(
-                self.model.parameters(), 
-                lr=self.args['lr'])
+            self.model.parameters(), 
+            lr=self.args['lr']
+        )
+        self.model, self.optimizer = amp.initialize(
+            self.model, 
+            self.optimizer, 
+            opt_level=self.args['amp_level']
+        )
+        
+        # before the Apex DDP, we need to use the convert_syncbn_model for BatchNorm
+        # self.model = DDP(self.model)
+        
+        # self.model = DataParallel(self.model, device_ids=self.gpu_ids)
+        # bert model is too big, try to use the DataParallel
         self.criterion = nn.CrossEntropyLoss()
         self.criterion_ = nn.CrossEntropyLoss(reduction='none')
-        
-        self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=self.args['amp_level'])
-
         self.show_parameters(self.args)
 
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
@@ -322,8 +333,12 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             loss = self.criterion(
                     output, 
                     label.view(-1))
-            loss.backward()
-            clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+            
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+            clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
+            # loss.backward()
+            # clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
             self.optimizer.step()
 
             total_loss += loss.item()
@@ -340,8 +355,8 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', now_correct/len(label), idx)
 
             pbar.set_description(f'[!] train loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
-        print(f'[!] overall acc: {round(correct/s, 4)}')
         recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
+        recoder.add_scalar(f'train-whole/Acc', correct/s, idx_)
         return round(total_loss / batch_num, 4)
     
     @torch.no_grad()

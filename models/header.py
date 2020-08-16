@@ -36,6 +36,8 @@ import requests
 # for PONE
 from scipy.stats import pearsonr, spearmanr
 from apex import amp
+from apex.parallel import DistributedDataParallel as DDP
+from apex.parallel import convert_syncbn_model
 
 import sys
 sys.path.append('..')
