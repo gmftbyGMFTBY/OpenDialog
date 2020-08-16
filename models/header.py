@@ -35,6 +35,7 @@ import transformers
 import requests
 # for PONE
 from scipy.stats import pearsonr, spearmanr
+from apex import amp
 
 import sys
 sys.path.append('..')

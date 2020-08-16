@@ -290,6 +290,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
                 'vocab_file': 'bert-base-chinese',
                 'pad': 0,
                 'model': 'bert-base-chinese',
+                'amp_level': 'O2',
         }
         # hyperparameters
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
@@ -303,6 +304,8 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
                 lr=self.args['lr'])
         self.criterion = nn.CrossEntropyLoss()
         self.criterion_ = nn.CrossEntropyLoss(reduction='none')
+        
+        self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=self.args['amp_level'])
 
         self.show_parameters(self.args)
 
