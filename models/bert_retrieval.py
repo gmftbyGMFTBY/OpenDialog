@@ -350,7 +350,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             s += len(label)
             
             recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
-            recoder.add_scalar(f'train-epoch-{idx_}/Loss', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
             recoder.add_scalar(f'train-epoch-{idx_}/Acc', correct/s, idx)
             recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', now_correct/len(label), idx)
 

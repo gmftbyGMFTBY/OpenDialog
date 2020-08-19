@@ -106,11 +106,15 @@ def generate_negative_samples_relatedness(responses, samples=10, pool_size=64, w
         p = list(set(p))
         if r in p:
             p.remove(r)
+        if len(p) >= samples:
+            p = p[:samples]
+        else:
+            p.extend(random.sample(responses, samples-len(p)))
         # embedding chosen
         rest_emb = embedding_function(w2v, p + [r])    # [pool_size+1, 300]
-        if len(rest_emb) <= 1:
-            rest_.append([])
-            continue
+        # if len(rest_emb) <= 1:
+        #     rest_.append([])
+        #     continue
         x, y = rest_emb[-1], rest_emb[:-1]
         y = np.stack(y)    # [pool_size, 300]
         cosine_similarity = np.dot(x, y.T) / np.linalg.norm(x) / np.linalg.norm(y)    # [pool_size]

@@ -207,6 +207,15 @@ def make_vocabs(responses):
     print(f'[!] obtain {len(words)} words from the responses')
     return list(words)
 
+def generate_token_type_ids(s, sep=102):
+    rest, type_ = [], 0
+    for item in s:
+        rest.append(type_)
+        if item == sep:
+            type_ = 1 if type_ == 0 else 0
+    assert len(rest) == len(s)
+    return torch.LongTensor(rest)
+
 # ========== wechat api ==========
 def reply_text(to_user, from_user, content):
     reply = '''<xml><ToUserName><![CDATA[%s]]></ToUserName><FromUserName><![CDATA[%s]]></FromUserName><CreateTime>%s</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[%s]]></Content><FuncFlag>0</FuncFlag></xml>'''

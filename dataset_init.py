@@ -168,39 +168,23 @@ def load_bert_ir_dataset(args):
         data = BERTIRDataset(path, mode=args['mode'], samples=1, negative_aspect='coherence')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
     else:
-        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='coherence')
+        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='hard')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     return iter_
 
 def load_bert_ir_multiview_dataset(args):
-    '''
-    batch size is different:
-    (1) for fluency, diversity, naturalness, relatedness, coherence, batch_size is 64
-    (2) for overall aspect: half of the batch_size (32)
-    '''
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:
-        iters = []
-        for aspect in ['coherence', 'fluency', 'diversity', 'naturalness', 'relatedness', 'overall']:
-            path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-            # samples = 1 if aspect in ['diversity', 'overall'] else 5
-            samples = 5 
-            if args['mode'] in ['train', 'dev']:
-                data = BERTIRDataset(path, mode=args['mode'], samples=samples, negative_aspect=aspect, reduce=True, reduce_num=50000)
-                iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
-                iters.append(iter_)
-            if not os.path.exists(data.pp_path):
-                data.save_pickle()
-            print(f'[!] process the negative aspect {aspect} over')
-        return iters
+        data = BERTIRDataset(path, mode=args['mode'], samples=1, negative_aspect='overall')
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
     else:
-        path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='overall')
+        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='hard')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)
-        if not os.path.exists(data.pp_path):
-            data.save_pickle()
-        return iter_
+    if not os.path.exists(data.pp_path):
+        data.save_pickle()
+    return iter_
 
 def load_pone_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}_pone.txt'

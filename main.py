@@ -85,7 +85,7 @@ def main(**args):
         'gpt2lm': GPT2Agent,
         'multigpt2': MultiGPT2Dataset,
         'bertretrieval': BERTRetrievalAgent,
-        'bertretrieval_multiview': BERTMULTIVIEWAgent,
+        'bertretrieval_multiview': BERTRetrievalAgent,
         'bertretrieval_cl': BERTRetrievalCLAgent,
         'bertlogic': BERTRetrievalAgent,
         'bertnli': BERTNLIAgent,

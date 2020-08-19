@@ -222,7 +222,7 @@ if __name__ == "__main__":
     # CUDA_VISIBLE_DEVICES=0 python -m multiview.multiviews
     model = MultiView(
                 topic=False,
-                coherence=False,
+                coherence=True,
                 length=False,
                 nidf_tf=False,
                 fluency=False,
@@ -230,24 +230,23 @@ if __name__ == "__main__":
                 mmi=False,
                 distinct=False,
                 bertmultiview=False,
-                bertmcf=True,
+                bertmcf=False,
                 bertmcf_path='ckpt/zh50w/bertmcf/best.pt',
                 bertmultiview_path='ckpt/zh50w/bertretrieval_multiview/best.pt',
                 mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
-                coherence_path='ckpt/zh50w/bertretrieval/best.pt',
+                coherence_path='ckpt/zh50w/bertretrieval_multiview/best.pt',
                 topic_path='ckpt/fasttext/model.bin',
                 fluency_path='ckpt/LM/gpt2lm/best.pt',
     )
     
-    dataset = read_evaluation_data('rest/train_generative/gpt2/rest.txt')
-    collect_results('multiview/evaluation_rest.txt', model, dataset)
+    # dataset = read_evaluation_data('rest/train_generative/gpt2/rest.txt')
+    # collect_results('multiview/evaluation_rest.txt', model, dataset)
 
-    '''
     responses = [
             '哈哈哈',
-            '我比较喜欢泰坦尼克号这种类型的',
+            '我比较喜欢泰坦尼克号这种电影类型的',
             '我还是挺喜欢恐怖电影的',
-            '我最喜欢恐怖电影了，真的非常刺激',
+            '恐怖电影非常刺激',
             '我喜欢打乒乓球',
             '我打乒乓球',
             '爱情喜欢我电影', 
@@ -269,4 +268,3 @@ if __name__ == "__main__":
 
     rest = model(contexts, responses, groundtruth=groundtruths, topic=topic, history=history, bertmultiview_details=False)
     pprint.pprint(rest)
-    '''

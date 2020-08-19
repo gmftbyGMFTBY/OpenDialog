@@ -84,14 +84,22 @@ def gpt2retrieval_test_collate_fn(batch):
 
 def gpt2_train_collate_fn(batch):
     pad = 0
-    ctx = []
+    ctx, token_type_ids = [], []
     for i in batch:
         ctx.append(i['context_id'])
+        # token_type_ids.append(i['token_type'])
     # NOTE: shuffle in the batch
+    # random_idx = list(range(len(ctx)))
+    # random.shuffle(random_idx)
+    # ctx = [ctx[i] for i in random_idx]
+    # token_type_ids = [token_type_ids[i] for i in random_idx]
     random.shuffle(ctx)
     ctx = pad_sequence(ctx, batch_first=True, padding_value=pad)
+    # token_type_ids = pad_sequence(token_type_ids, batch_first=True, padding_value=0)
     if torch.cuda.is_available():
         ctx = ctx.cuda()
+        # token_type_ids = token_type_ids.cuda()
+    # return ctx, token_type_ids
     return ctx
 
 def gpt2_test_collate_fn(batch):
@@ -101,6 +109,7 @@ def gpt2_test_collate_fn(batch):
     pad = 0
     assert len(batch) == 1, f'[!] batch must be 1, but got {len(batch)}'
     ctx, res = batch[0]['context_id'], batch[0]['reply_id']
+    # c_token_type, reply_speaker = batch[0]['context_token_type'], batch[0]['reply_token_type']
     # for i in batch:
     #     ctx.append(i['context_id'])
     #     res.append(i['reply_id'])
@@ -109,6 +118,8 @@ def gpt2_test_collate_fn(batch):
     # ctx/res: [batch, max_len]
     if torch.cuda.is_available():
         ctx, res = ctx.cuda(), res.cuda()
+        # c_token_type = c_token_type.cuda()
+    # return ctx, res, c_token_type, reply_speaker
     return ctx, res
 
 def gpt2_test_collate_fn_batch(batch):

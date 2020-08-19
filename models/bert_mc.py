@@ -80,6 +80,7 @@ class BERTMCAgent(RetrievalBaseAgent):
             'nhead': 2,    # NOTE:
             'model': 'bert-base-chinese',
             'model_type': model_type,
+            'amp_level': 'O2',
         }
         # hyperparameters
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
@@ -96,11 +97,16 @@ class BERTMCAgent(RetrievalBaseAgent):
             raise Exception(f'[!] unknow model type {self.args["model_type"]}')
         if torch.cuda.is_available():
             self.model.cuda()
-        self.model = DataParallel(self.model, device_ids=self.gpu_ids)
+        # self.model = DataParallel(self.model, device_ids=self.gpu_ids)
         # bert model is too big, try to use the DataParallel
         self.optimizer = transformers.AdamW(
             self.model.parameters(), 
             lr=self.args['lr']
+        )
+        self.model, self.optimizer = amp.initialize(
+            self.model, 
+            self.optimizer, 
+            opt_level=self.args['amp_level']
         )
         self.criterion = nn.CrossEntropyLoss()
         self.show_parameters(self.args)
@@ -118,8 +124,12 @@ class BERTMCAgent(RetrievalBaseAgent):
                 output, 
                 label.view(-1),
             )
-            loss.backward()
-            clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+            clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
+            
+            # loss.backward()
+            # clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
             self.optimizer.step()
             total_loss += loss.item()
             batch_num += 1

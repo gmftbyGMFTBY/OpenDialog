@@ -18,44 +18,52 @@ class GPT2(nn.Module):
 
     def forward(self, inpt_ids):
         # inpt_ids: [batch, seq]
+        # ipdb.set_trace()
         attn_mask = generate_attention_mask(inpt_ids)
         outputs = self.model(
-                    input_ids=inpt_ids, 
-                    attention_mask=attn_mask)
+            input_ids=inpt_ids, 
+            attention_mask=attn_mask
+        )
         output = outputs[0]    # [batch, seq, vocab]
         return output
 
+    @torch.no_grad()
     def predict(self, inpt_ids, max_len):
         '''
         batch_size is 1
         inpt_ids: [seq]
+        token_type_ids: [seq]
         return a list of ids (generated)
         no pad, do not need attention_mask
         '''
-        with torch.no_grad():
-            generated = []
-            for _ in range(max_len):
-                outputs = self.model(input_ids=inpt_ids)
-                next_token_logits = outputs[0][-1, :]    # [vocab]
-                # ignore the [UNK] token
-                next_token_logits[self.unk_id] = -np.inf
-                # repetition penalty
-                if generated:
-                    next_token_logits[list(set(generated))] /= self.repetition_penalty
-                filtered_logits = top_k_top_p_filtering(
-                        next_token_logits, 
-                        top_k=self.topk, 
-                        top_p=self.topp)
-                next_token = torch.multinomial(
-                        F.softmax(filtered_logits, dim=-1),
-                        num_samples=1)
-                if next_token == self.sep_id:
-                    break
-                generated.append(next_token.item())
-                inpt_ids = torch.cat((inpt_ids, next_token), dim=0)
-                # remember to cut off 
-                inpt_ids = inpt_ids[-self.n_ctx:]
-            return generated
+        # ipdb.set_trace()
+        generated = []
+        for _ in range(max_len):
+            outputs = self.model(
+                input_ids=inpt_ids
+            )
+            next_token_logits = outputs[0][-1, :]    # [vocab]
+            # ignore the [UNK] token
+            next_token_logits[self.unk_id] = -np.inf
+            # repetition penalty
+            if generated:
+                next_token_logits[list(set(generated))] /= self.repetition_penalty
+            filtered_logits = top_k_top_p_filtering(
+                    next_token_logits, 
+                    top_k=self.topk, 
+                    top_p=self.topp)
+            next_token = torch.multinomial(
+                    F.softmax(filtered_logits, dim=-1),
+                    num_samples=1)
+            if next_token == self.sep_id:
+                break
+            generated.append(next_token.item())
+            inpt_ids = torch.cat((inpt_ids, next_token), dim=0)
+            # remember to cut off 
+            inpt_ids = inpt_ids[-self.n_ctx:]
+            # token_type_ids = torch.cat((token_type_ids, speaker), dim=0)
+            # token_type_ids = token_type_ids[-self.n_ctx:]
+        return generated
 
     @torch.no_grad()
     def predict_batch(self, inpt_ids, max_len):
@@ -115,14 +123,14 @@ class GPT2Agent(BaseAgent):
                 'lr': lr,
                 'grad_clip': 1.0,
                 'pad': 0,
-                'tgt_len_size': 50,
+                'tgt_len_size': 30,
                 'lr_gamma': 0.5,
                 'patience': 5,
                 'min_lr': 1e-5,
                 'warmup_steps': 2000,
                 'total_steps': total_steps,
-                'topk': 10000,
-                'topp': 1.0, 
+                'topk': 200,
+                'topp': 0.95, 
                 'config_path': 'data/config/model_config_dialogue_big.json',
                 'multi_gpu': self.gpu_ids,
                 'run_mode': run_mode,
@@ -131,6 +139,7 @@ class GPT2Agent(BaseAgent):
                 'topic_transfer': {'音乐': 'music', '体育': 'sport', '数码产品': 'electric', '美食': 'food', '电影': 'movie'},
                 'balanceddata_parallel_gpu0_size': 2,
                 'repetition_penalty': 1,
+                'amp_level': 'O2',
         }
         # hyperparameters
         
@@ -153,19 +162,23 @@ class GPT2Agent(BaseAgent):
         )
         
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.args['pad'], reduction='sum')
+        if torch.cuda.is_available():
+            self.model.cuda()
         self.optimizer = transformers.AdamW(
                 self.model.parameters(), 
                 lr=self.args['lr'], 
                 correct_bias=True)
+        self.model, self.optimizer = amp.initialize(
+            self.model, 
+            self.optimizer, 
+            opt_level=self.args['amp_level']
+        )
 
         # need to obtain the whole iter
         self.warmup_scheduler = transformers.get_linear_schedule_with_warmup(
                 self.optimizer,
                 num_warmup_steps=self.args['warmup_steps'],
                 num_training_steps=self.args['total_steps'])
-        if torch.cuda.is_available():
-            self.model.cuda()
-        
         # train: DataParallel; test: no DataParallel
         if self.args['run_mode'] == 'train':
             self.model = DataParallel(
@@ -237,11 +250,14 @@ class GPT2Agent(BaseAgent):
                 total_acc.append(accuracy.item())
                 loss = loss / num_targets
                 
-                if mode == 'train':
-                    loss.backward()
-                    clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
-                    self.optimizer.step()
-                    self.warmup_scheduler.step()
+                # loss.backward()
+                # clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+                clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
+            
+                self.optimizer.step()
+                self.warmup_scheduler.step()
                 total_loss += loss.item()
                 batch_num += 1
                 
