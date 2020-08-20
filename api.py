@@ -32,7 +32,7 @@ elif args['model'] == 'gpt2':
     agent = GPT2Agent(1000, args['multi_gpu'], run_mode='rerank_ir')
     agent.load_model(f'ckpt/train_generative/gpt2/best.pt')
 elif args['model'] == 'lccc':
-    agent = LCCCAgent(1000, args['multi_gpu'], run_mode='test')
+    agent = LCCCAgent(args['multi_gpu'])
 elif args['model'] == 'when2talk':
     agent = When2TalkAgent(1000, args['multi_gpu'], run_mode='test')
     agent.load_model(f'ckpt/when2talk/when2talk/best.pt')
