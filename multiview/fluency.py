@@ -13,20 +13,38 @@ class SAFETY_FLUENCY(BaseAgent):
     '''
     Use the pre-trained Language Model to calculate the fluency scores.
     Use the pre-trained dialog model to calculate the safety scores.
+    
+    LCCC-GPT Model
     '''
 
-    def __init__(self):
+    def __init__(self, path):
         super(SAFETY_FLUENCY, self).__init__()
-        self.vocab = BertTokenizer(vocab_file='data/vocab/vocab_small')
-        self.unk = self.vocab.convert_tokens_to_ids('[UNK]')
-        self.sep = self.vocab.convert_tokens_to_ids('[SEP]')
-        self.model = GPT2(
-                len(self.vocab), self.unk, self.sep, 8, 0.9, 1.0,
-                config_path='data/config/model_lm_small.json')
-        # self.max_len = 10
-        # self.weight = 1 / np.arange(1, self.max_len+1)
+        self.vocab = BertTokenizer.from_pretrained(path)
+        self.model = LCCC(
+            path,
+            0,    # topk
+            0.9,    # topp
+        )
+        self.SPECIAL_TOKENS = ["[CLS]", "[SEP]", "[speaker1]", "[speaker2]"]
         if torch.cuda.is_available():
             self.model.cuda()
+            
+    def tokenize_(self, obj):
+        '''borrow from thu-coai/CDial-GPT'''
+        return self.model.vocab.convert_tokens_to_ids(self.model.vocab.tokenize(obj))
+    
+    def build_input_from_segments(self, history, response, with_eos=True):
+        '''borrow from the thu-coai/CDial-GPT'''
+        bos, eos, speaker1, speaker2 = self.vocab.convert_tokens_to_ids(self.SPECIAL_TOKENS)
+        sequence = [[bos]] + history + [response + ([eos] if with_eos else [])]
+        sequence = [sequence[0]] + [[speaker2 if i % 2 else speaker1] + s
+                                    for i, s in enumerate(sequence[1:])]
+        instance = {}
+        instance["input_ids"] = list(chain(*sequence))
+        instance["token_type_ids"] = [bos] + [speaker2 if i % 2 else speaker1 for i, s in
+                                              enumerate(sequence[1:])
+                                              for _ in s]
+        return instance
 
     def scores(self, msgs, resps):
         fluency_scores, safety_scores = [], []
@@ -41,6 +59,9 @@ class SAFETY_FLUENCY(BaseAgent):
 
     @torch.no_grad()
     def score(self, msg, res):
+        self.model.eval()
+        msgs = [self.tokenize_(msg), self.tokenize_(res)]
+        
         c_ids = self.vocab.encode(msg)
         r_ids = self.vocab.encode(res)[1:]    # ignore the [CLS]
         l_r_ids = len(r_ids)

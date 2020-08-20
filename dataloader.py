@@ -893,9 +893,10 @@ class BERTIRDataset(Dataset):
 
     def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
                  turn_size=3, max_len=300, samples=9, vocab_file='data/vocab/vocab_small',
-                 negative_aspect='overall'):
+                 negative_aspect='overall', soft_label=False):
         self.mode = mode
         self.max_len = max_len 
+        self.soft_label = soft_label
         # data = read_csv_data(path)
         data = read_text_data(path)
         # context and response are all the negative samples 
@@ -929,6 +930,8 @@ class BERTIRDataset(Dataset):
                 if negative_aspect == 'coherence':
                     # test mode use the random negative samples for checking the performance
                     ran = 0
+                elif negative_aspect == 'naturalness':
+                    ran = 0.7
                 elif negative_aspect == 'hard':
                     ran = 0.9
                 else:
@@ -937,7 +940,9 @@ class BERTIRDataset(Dataset):
                 if 0 <= ran < 0.2: 
                     # coherence
                     for c, response in zip(contexts_, responses_):
-                        negative = generate_negative_samples(response, responses, samples=samples)
+                        negative = generate_negative_samples(
+                            response, responses, samples=samples
+                        )
                         d_.append((c, [response] + negative, 'coherence'))
                 elif 0.2 <= ran < 0.4:
                     # fluency

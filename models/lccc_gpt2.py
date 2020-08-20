@@ -24,6 +24,10 @@ class LCCC(nn.Module):
                                               for _ in s]
         return instance
     
+    def build_input_from_segments_batch(self, history, response, with_eos=True):
+        instances = [self.build_input_from_segments([h], r, with_eos=with_eos) for h, r in zip(history, response)]
+        return instances
+    
     @torch.no_grad()
     def predict(self, inpt_ids, max_len, temperature=0.7, min_length=1):
         '''batch_size is 1
@@ -41,7 +45,6 @@ class LCCC(nn.Module):
             logits = top_k_top_p_filtering(logits, top_k=self.topk, top_p=self.topp)
             probs = F.softmax(logits, dim=-1)
             prev = torch.multinomial(probs, 1)
-            # ipdb.set_trace()
             if i < min_length and prev.item() in special_tokens_ids:
                 while prev.item() in special_tokens_ids:
                     prev = torch.multinomial(probs, num_samples=1)
@@ -51,9 +54,45 @@ class LCCC(nn.Module):
             current_output.append(prev.item())
         return current_output
     
+    @torch.no_grad()
+    def predict_batch(self, inpt_ids, max_len, temperature=0.7):
+        '''batch size is not 1; but the length must be the same.
+        .predict_batch can speed up the testing and provide the api for generation rerank
+        inpt_ids: list of input_ids (length is Batch size)
+        
+        return: 
+        current_output: [B, S] TYPE IS LIST
+        '''
+        current_output = [[] for _ in range(len(inpt_ids))]    # [B, S']
+        stop_flag = [0] * len(inpt_ids)
+        special_tokens_ids = self.vocab.convert_tokens_to_ids(self.SPECIAL_TOKENS)
+        for i in range(max_len):
+            instances = self.build_input_from_segments_batch(
+                inpt_ids, current_output, with_eos=False
+            )
+            input_ids = to_cuda(
+                torch.LongTensor([instance["input_ids"] for instance in instances])
+            )    # [B, S]
+            token_type_ids = to_cuda(
+                torch.LongTensor([instance["token_type_ids"] for instance in instances])
+            )    # [B, S]
+            logits, *_ = self.model(input_ids, token_type_ids=token_type_ids)
+            logits = logits[:, -1, :] / temperature    # [B, V]
+            logits = top_k_top_p_filtering_batch(logits, top_k=self.topk, top_p=self.topp)
+            probs = F.softmax(logits, dim=-1)    # [B, V]
+            prev = torch.multinomial(probs, num_samples=1).squeeze(1).tolist()    # [B]
+            
+            for idx, item in enumerate(prev):
+                if item in special_tokens_ids:
+                    stop_flag[idx] = 1
+                current_output[idx].append(item)
+            if sum(stop_flag) == len(stop_flag):
+                break
+        return current_output
+    
 class LCCCAgent(BaseAgent):
     
-    def __init__(self, multi_gpu):
+    def __init__(self, multi_gpu, run_mode='test'):
         super(LCCCAgent, self).__init__()
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(','))))
@@ -66,12 +105,19 @@ class LCCCAgent(BaseAgent):
             'temperature': 0.7,
             'pretrained_path': '/home/lt/data/LCCD_GPT',
             'multi_gpu': self.gpu_ids,
+            'run_mode': run_mode,    # test / rerank
+            'samples': 16,
         }
         self.model = LCCC(
             self.args['pretrained_path'],
             self.args['topk'], 
             self.args['topp'],
         )
+        
+        # use the BERTRetrieval model as the reranker
+        # i am tired, just random sample one candidate, test the predict_batch
+        if self.args['run_mode'] == 'rerank':
+            pass
         
         if torch.cuda.is_available():
             self.model.cuda()
@@ -85,17 +131,32 @@ class LCCCAgent(BaseAgent):
     @torch.no_grad()
     def talk(self, topic, msgs, maxlen=50, batch_size=32):
         self.model.eval()
-        msgs = [self.tokenize_(msgs)]
-        tgt = self.model.predict(
-            msgs, 
-            maxlen,
-            temperature=self.args['temperature'],
-            min_length=1,
-        )
-        tgt = self.model.vocab.convert_ids_to_tokens(tgt)
-        tgt = ''.join(tgt)
-        return tgt
-    
+        if self.args['run_mode'] == 'test':
+            msgs = [self.tokenize_(msgs)]
+            tgt = self.model.predict(
+                msgs, 
+                maxlen,
+                temperature=self.args['temperature'],
+                min_length=1,
+            )
+            tgt = self.model.vocab.convert_ids_to_tokens(tgt)
+            tgt = ''.join(tgt)
+            return tgt
+        else:    # rerank run mode
+            msgs = [self.tokenize_(msgs)] * self.args['samples']
+            tgts = self.model.predict_batch(
+                msgs, maxlen, temperature=self.args['temperature']
+            )
+            rest = []
+            for i in tgts:
+                i = self.model.vocab.convert_ids_to_tokens(i)
+                i = ''.join(i)
+                if '[SEP]' in i:
+                    i = i[:i.index('[SEP]')]
+                rest.append(i)
+            # i am tired, just random sample
+            return random.choice(rest)
+
 # ========== LCCC IR ========== #
 class LCCCIR(nn.Module):
     
