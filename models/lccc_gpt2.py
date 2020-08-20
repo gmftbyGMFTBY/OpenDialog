@@ -117,7 +117,23 @@ class LCCCAgent(BaseAgent):
         # use the BERTRetrieval model as the reranker
         # i am tired, just random sample one candidate, test the predict_batch
         if self.args['run_mode'] == 'rerank':
-            pass
+            from multiview.multiview import MultiView
+            print(f'[!] MultiView reranker model will be initized')
+            self.reranker = MultiView(
+                topic=False,
+                length=False,
+                nidf_tf=False,
+                coherence=True,
+                fluency=False,
+                repetition_penalty=False,
+                mmi=False,
+                distinct=False,
+                mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
+                coherence_path='ckpt/zh50w/bertretrieval/best.pt',
+                topic_path='ckpt/fasttext/model.bin',
+                fluency_path='ckpt/LM/gpt2lm/best.pt',
+            )
+            print(f'[!] load multiview model over')
         
         if torch.cuda.is_available():
             self.model.cuda()
@@ -143,9 +159,9 @@ class LCCCAgent(BaseAgent):
             tgt = ''.join(tgt)
             return tgt
         else:    # rerank run mode
-            msgs = [self.tokenize_(msgs)] * self.args['samples']
+            msgs_ = [self.tokenize_(msgs)] * self.args['samples']
             tgts = self.model.predict_batch(
-                msgs, maxlen, temperature=self.args['temperature']
+                msgs_, maxlen, temperature=self.args['temperature']
             )
             rest = []
             for i in tgts:
@@ -154,8 +170,11 @@ class LCCCAgent(BaseAgent):
                 if '[SEP]' in i:
                     i = i[:i.index('[SEP]')]
                 rest.append(i)
-            # i am tired, just random sample
-            return random.choice(rest)
+            # rerank
+            scores = self.reranker([msgs]*len(rest), rest, topic=None)[0]
+            index = np.argmax(scores)
+            response = rest[index]
+            return response
 
 # ========== LCCC IR ========== #
 class LCCCIR(nn.Module):
