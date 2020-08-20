@@ -8,7 +8,6 @@ The Dataset Object can handle the single-turn and multi-turn (<eou> seperator) d
 
 # ========== For LCCC ========== #
 SPECIAL_TOKENS = ["[CLS]", "[SEP]", "[speaker1]", "[speaker2]"]
-MODEL_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
 # ========== For LCCC ========== #
 
 class vocabulary:
@@ -138,15 +137,15 @@ class When2talkDataset(Dataset):
         return self.data[i]
     
 # ========== LCCC-GPT2 ========== #
+# For LCCC IR Model, fine tuning the LCCC GPT2 model for retrieval dialog systems
 class WBDataset(Dataset):
 
-    def __init__(self, vocab, path, max_history=15, batch_first=True, lm_labels=True):
+    def __init__(self, vocab, path, samples=1, max_history=5, batch_first=True):
         self.tokenizer = BertTokenizer.from_pretrained(vocab)
         self.max_history = max_history
         self.pad = self.tokenizer.pad_token_id
         self.batch_first = batch_first
-        self.lm_labels = lm_labels
-        self.pp_path = f'{os.path.splitext(path)[0]}.pt'
+        self.pp_path = f'{os.path.splitext(path)[0]}_lcccir.pt'
         
         # load the dataset
         if os.path.exists(self.pp_path):
@@ -154,11 +153,27 @@ class WBDataset(Dataset):
             print(f'[!] load preprocessed file from {self.pp_path}')
         else:
             with open(path, 'r', encoding='utf-8') as f:
-                # LCCC
-                # only need the train dataset
-                # dataset = json.loads(f.read())['train'][:100]
-                # print(f'[!] load the json raw data from {path} over: {len(dataset)} samples found')
                 dataset = read_text_data_sep(path)
+                responses = [i[-1] for i in dataset]
+                dataset = [self.tokenize_(item) for item in tqdm(dataset)]
+                self.data = []
+                # construct the negative samples and positive samples
+                for dialog in tqdm(dataset):
+                    context, response = dialog[:-1], dialog[-1]
+                    negatives = generate_negative_samples(
+                        response, 
+                        responses, 
+                        samples=samples
+                    )
+                    # tokenize negative samples
+                    negatives = self.tokenize_(negatives)
+                    for i, r in enumerate([response] + negatives):
+                        bundle = {
+                            'context': context + [r],
+                            'label': 1 if i == 0 else 0,
+                        }
+                        self.data.append(bundle)
+                print(f'[!] collect {len(self.data)} samples for training')
             torch.save(self.data, self.pp_path)
             print(f'[!] process the dataset and write it into {self.pp_path}')
             
@@ -171,15 +186,12 @@ class WBDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, index):
-        if self.lm_labels:
-            history = self.data[index][-2 * self.max_history:-1]
-            resposne = self.data[index][-1]
-        else:
-            history = self.data[index][-2 * self.max_history:-1]
-            resposne = []
-        return self.process(history, resposne)
+        history = self.data[index]['context'][-2 * self.max_history:-1]
+        resposne = self.data[index]['context'][-1]
+        label = self.data[index]['label']
+        return self.process(history, resposne, label)
 
-    def process(self, history, resposne, with_eos=True):
+    def process(self, history, resposne, label, with_eos=True):
         bos, eos, speaker1, speaker2 = self.tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
         sequence = [[bos]] + history + [resposne + ([eos] if with_eos else [])]
         sequence = [sequence[0]] + [[speaker2 if i % 2 else speaker1] + s
@@ -189,10 +201,7 @@ class WBDataset(Dataset):
         instance["token_type_ids"] = [bos] + [speaker2 if i % 2 else speaker1 for i, s in
                                               enumerate(sequence[1:])
                                               for _ in s]
-        instance["lm_labels"] = [-1] * len(instance["input_ids"])
-        if self.lm_labels:
-            instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:]
-
+        instance["label"] = label
         return instance
 
     def collate(self, batch):
@@ -202,9 +211,8 @@ class WBDataset(Dataset):
         token_type_ids = pad_sequence(
             [torch.tensor(instance["token_type_ids"], dtype=torch.long) for instance in batch],
             batch_first=self.batch_first, padding_value=self.pad)
-        labels = pad_sequence(
-            [torch.tensor(instance["lm_labels"], dtype=torch.long) for instance in batch],
-            batch_first=self.batch_first, padding_value=-1)
+        labels = torch.LongTensor([instance['label'] for instance in batch])
+        # [B, S]; [B, S]; [B]
         return input_ids, token_type_ids, labels
 # ========== LCCC-GPT2 ========== #
 

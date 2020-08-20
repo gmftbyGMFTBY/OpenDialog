@@ -179,7 +179,7 @@ class LCCCIRAgent(RetrievalBaseAgent):
     which is hopeful than fine-tuning BERT model.
     '''
     
-    def __init__(self, multi_gpu, run_mode):
+    def __init__(self, multi_gpu, run_mode='train'):
         super(LCCCIRAgent, self).__init__()
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(','))))
@@ -195,26 +195,30 @@ class LCCCIRAgent(RetrievalBaseAgent):
             'multi_gpu': self.gpu_ids,
             'run_mode': run_mode,
             'samples': 10,
+            'amp_level': 'O2',
         }
         self.model = LCCCIR(
             self.args['pretrained_path'],
             self.args['topk'], 
             self.args['topp'],
         )
+        if torch.cuda.is_available():
+            self.model.cuda()
         
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = transformers.AdamW(
             self.model.parameters(), 
             lr=self.args['lr'],
         )
-
-        if torch.cuda.is_available():
-            self.model.cuda()
-        
+        self.model, self.optimizer = amp.initialize(
+            self.model,
+            self.optimizer, 
+            opt_level=self.args['amp_level']
+        )
         if self.args['run_mode'] == 'train':
             self.model = DataParallel(
                 self.model, 
-                device_ids=self.gpu_ids
+                device_ids=self.gpu_ids,
             )
         self.show_parameters(self.args)
         
@@ -224,6 +228,7 @@ class LCCCIRAgent(RetrievalBaseAgent):
         total_loss, total_acc, batch_num = 0, [], 0
         pbar = tqdm(train_iter)
         for idx, batch in enumerate(pbar):
+            # [B, S]; [B, S]; [B]
             cid, token_type_ids, label = batch
             self.optimizer.zero_grad()
             output = self.model(cid, token_type_ids)    # [B, 2]
@@ -231,8 +236,11 @@ class LCCCIRAgent(RetrievalBaseAgent):
                 output, 
                 label.view(-1),
             )
-            loss.backward()
-            clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+            clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
+            # loss.backward()
+            # clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
             self.optimizer.step()
             total_loss += loss.item()
             batch_num += 1

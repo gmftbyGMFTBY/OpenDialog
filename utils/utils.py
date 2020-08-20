@@ -5,6 +5,8 @@ def collect_parameter_4_model(args):
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'bertretrieval':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
+    elif args['model'] == 'lcccir':
+        return (args['multi_gpu'],), {'run_mode': args['mode']}
     elif args['model'] == 'bertmc':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang'], 'model_type': 'mc'}
     elif args['model'] == 'bertmcf':

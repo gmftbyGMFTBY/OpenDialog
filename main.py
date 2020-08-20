@@ -51,6 +51,8 @@ def load_dataset(args):
         return load_multigpt2_dataset(args)
     elif args['model'] == 'bertretrieval':
         return load_bert_ir_dataset(args)
+    elif args['model'] == 'lcccir':
+        return load_lccc_ir_dataset(args)
     elif args['model'] == 'bertretrieval_multiview':
         return load_bert_ir_multiview_dataset(args)
     elif args['model'] == 'bertretrieval_cl':
@@ -95,6 +97,7 @@ def main(**args):
         'bertmc': BERTMCAgent,
         'bertmcf': BERTMCAgent,
         'bertretrieval_dis': BERTRetrievalDISAgent,
+        'lcccir': LCCCIRAgent,
     }
     parameter_map, parameter_key = collect_parameter_4_model(args)
     agent = agent_map[args['model']](*parameter_map, **parameter_key)
