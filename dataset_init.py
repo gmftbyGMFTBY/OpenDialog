@@ -67,6 +67,17 @@ def load_when2talk_dataset(args):
         iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=gpt2_test_collate_fn)
     return iter_
 
+def load_lccc_dataset(args):
+    datasets, raw_samples = get_data(tokenizer, args.data_path, args.dataset_cache)
+    train_dataset = WBDataset(datasets["train"], tokenizer)
+    train_loader = DataLoader(train_dataset,
+                              sampler=train_sampler,
+                              collate_fn=train_dataset.collate,
+                              num_workers=args.num_workers,
+                              batch_size=args.train_batch_size,
+                              shuffle=(not args.distributed))
+    return train_loader
+
 def load_gpt2_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:

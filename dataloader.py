@@ -6,6 +6,11 @@ from data import *
 The Dataset Object can handle the single-turn and multi-turn (<eou> seperator) dialog format.
 '''
 
+# ========== For LCCC ========== #
+SPECIAL_TOKENS = ["[CLS]", "[SEP]", "[speaker1]", "[speaker2]"]
+MODEL_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
+# ========== For LCCC ========== #
+
 class vocabulary:
     
     '''
@@ -131,6 +136,77 @@ class When2talkDataset(Dataset):
 
     def __getitem__(self, i):
         return self.data[i]
+    
+# ========== LCCC-GPT2 ========== #
+class WBDataset(Dataset):
+
+    def __init__(self, vocab, path, max_history=15, batch_first=True, lm_labels=True):
+        self.tokenizer = BertTokenizer.from_pretrained(vocab)
+        self.max_history = max_history
+        self.pad = self.tokenizer.pad_token_id
+        self.batch_first = batch_first
+        self.lm_labels = lm_labels
+        self.pp_path = f'{os.path.splitext(path)[0]}.pt'
+        
+        # load the dataset
+        if os.path.exists(self.pp_path):
+            self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+        else:
+            with open(path, 'r', encoding='utf-8') as f:
+                # LCCC
+                # only need the train dataset
+                # dataset = json.loads(f.read())['train'][:100]
+                # print(f'[!] load the json raw data from {path} over: {len(dataset)} samples found')
+                dataset = read_text_data_sep(path)
+            torch.save(self.data, self.pp_path)
+            print(f'[!] process the dataset and write it into {self.pp_path}')
+            
+    def tokenize_(self, obj):
+        if isinstance(obj, str):
+            return self.tokenizer.convert_tokens_to_ids(self.tokenizer.tokenize(obj))
+        return list(self.tokenize_(o) for o in obj)
+    
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        if self.lm_labels:
+            history = self.data[index][-2 * self.max_history:-1]
+            resposne = self.data[index][-1]
+        else:
+            history = self.data[index][-2 * self.max_history:-1]
+            resposne = []
+        return self.process(history, resposne)
+
+    def process(self, history, resposne, with_eos=True):
+        bos, eos, speaker1, speaker2 = self.tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
+        sequence = [[bos]] + history + [resposne + ([eos] if with_eos else [])]
+        sequence = [sequence[0]] + [[speaker2 if i % 2 else speaker1] + s
+                                    for i, s in enumerate(sequence[1:])]
+        instance = {}
+        instance["input_ids"] = list(chain(*sequence))
+        instance["token_type_ids"] = [bos] + [speaker2 if i % 2 else speaker1 for i, s in
+                                              enumerate(sequence[1:])
+                                              for _ in s]
+        instance["lm_labels"] = [-1] * len(instance["input_ids"])
+        if self.lm_labels:
+            instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:]
+
+        return instance
+
+    def collate(self, batch):
+        input_ids = pad_sequence(
+            [torch.tensor(instance["input_ids"], dtype=torch.long) for instance in batch],
+            batch_first=self.batch_first, padding_value=self.pad)
+        token_type_ids = pad_sequence(
+            [torch.tensor(instance["token_type_ids"], dtype=torch.long) for instance in batch],
+            batch_first=self.batch_first, padding_value=self.pad)
+        labels = pad_sequence(
+            [torch.tensor(instance["lm_labels"], dtype=torch.long) for instance in batch],
+            batch_first=self.batch_first, padding_value=-1)
+        return input_ids, token_type_ids, labels
+# ========== LCCC-GPT2 ========== #
 
 class GPT2Dataset(Dataset):
     
@@ -1735,8 +1811,8 @@ if __name__ == "__main__":
     # train_data = MultiGPT2Dataset('./data/zh50w/train.csv', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=multigpt2_train_collate_fn)
     # ========== BERTIRDataset ========== #
-    train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='overall')
-    train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_train_collate_fn)
+    # train_data = BERTIRDataset('data/zh50w/train.txt', mode='train', samples=9, negative_aspect='overall')
+    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=bert_ir_train_collate_fn)
     # ========== BERTIRCLDataset ========== #
     # train_data = BERTIRCLDataset('data/zh50w/train.txt', mode='train', samples=1)
     # train_data.save_pickle()
@@ -1746,7 +1822,9 @@ if __name__ == "__main__":
     # ========== BERTIR ========== #
     # train_data = BERTNLIDataset('data/NLI/cnsd_snli_v1.0.train.jsonl', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=nli_collate_fn)
-    
+    # ========== LCCC ========== #
+    train_data = WBDataset('data/config/LCCC', 'data/LCCC/LCCC-base.json')
+    train_iter = DataLoader(train_data, collate_fn=train_data.collate, batch_size=10)
     # ========= ITERATE ========= # 
     for batch in tqdm(train_iter):
         ipdb.set_trace()

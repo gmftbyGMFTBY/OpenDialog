@@ -350,7 +350,7 @@ class IRHead(nn.Module):
         score = self.opt_layer(inpt)    # [batch, 2]
         return score
 
-def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-np.inf):
+def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, threshold=-float('Inf'), filter_value=-np.inf):
     assert logits.dim() == 1
     top_k = min(top_k, logits.size(-1))
     if top_k > 0:
@@ -365,6 +365,9 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-np.inf):
 
         indices_to_remove = sorted_indices[sorted_indices_to_remove]
         logits[indices_to_remove] = filter_value
+        
+    indices_to_remove = logits < threshold
+    logits[indices_to_remove] = filter_value
     return logits
 
 def top_k_top_p_filtering_batch(logits, top_k=0, top_p=0.0, filter_value=-np.inf, 

@@ -30,7 +30,7 @@ from bert_serving.client import BertClient
 from transformers.modeling_gpt2 import GPT2Model, GPT2Config, GPT2LMHeadModel
 from transformers import BertTokenizer
 from transformers import BertForSequenceClassification, BertModel, BertForMultipleChoice
-from transformers import AutoModelWithLMHead, AutoTokenizer
+from transformers import AutoModelWithLMHead, AutoTokenizer, OpenAIGPTLMHeadModel
 import transformers
 import requests
 # for PONE
