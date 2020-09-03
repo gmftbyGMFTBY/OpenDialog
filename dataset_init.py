@@ -78,6 +78,12 @@ def load_lccc_ir_dataset(args):
         iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
     return iter_
 
+def load_lccc_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    data = FTWBDataset('/home/lt/data/LCCD_GPT', args['mode'], path)
+    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=data.collate)
+    return iter_
+
 def load_gpt2_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:

@@ -108,7 +108,7 @@ class GPT2(nn.Module):
 
 class GPT2Agent(BaseAgent):
 
-    def __init__(self, total_steps, multi_gpu, vocab_file='data/vocab/vocab_small', run_mode='train', lang='zh', lm=False):
+    def __init__(self, total_steps, multi_gpu, vocab_file='data/vocab/vocab_small', run_mode='train', lang='zh', lm=False, local_rank=0):
         super(GPT2Agent, self).__init__()
         # hyperparameters
         try:
@@ -161,6 +161,11 @@ class GPT2Agent(BaseAgent):
                 config_path=self.args['config_path']
         )
         
+        # NOTE:
+        torch.cuda.set_device(local_rank)
+        # device = torch.device("cuda", local_rank)
+        torch.distributed.init_process_group(backend='nccl', init_method='env://')
+        
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.args['pad'], reduction='sum')
         if torch.cuda.is_available():
             self.model.cuda()
@@ -181,9 +186,12 @@ class GPT2Agent(BaseAgent):
                 num_training_steps=self.args['total_steps'])
         # train: DataParallel; test: no DataParallel
         if self.args['run_mode'] == 'train':
-            self.model = DataParallel(
-                    self.model, 
-                    device_ids=self.gpu_ids)
+            # NOTE:
+            # self.model = DistributedDataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
+            self.model = DataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
+            # self.model = DataParallel(
+            #         self.model, 
+            #         device_ids=self.gpu_ids)
             # self.model = BalancedDataParallel(
             #         self.args['balanceddata_parallel_gpu0_size'],
             #         self.model,

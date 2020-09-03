@@ -20,6 +20,7 @@ def parser_args():
     parser.add_argument('--multi_gpu', type=str, default=None)
     parser.add_argument('--curriculum', dest='curriculum', action='store_true')
     parser.add_argument('--no-curriculum', dest='curriculum', action='store_false')
+    parser.add_argument('--local_rank', type=int)
     return parser.parse_args()
 
 def load_dataset(args):
@@ -53,6 +54,8 @@ def load_dataset(args):
         return load_bert_ir_dataset(args)
     elif args['model'] == 'lcccir':
         return load_lccc_ir_dataset(args)
+    elif args['model'] == 'lccc':
+        return load_lccc_dataset(args)
     elif args['model'] == 'bertretrieval_multiview':
         return load_bert_ir_multiview_dataset(args)
     elif args['model'] == 'bertretrieval_cl':
@@ -96,6 +99,7 @@ def main(**args):
         'pone': PONEAgent,
         'bertmc': BERTMCAgent,
         'bertmcf': BERTMCAgent,
+        'lccc': LCCCFTAgent,
         'bertretrieval_dis': BERTRetrievalDISAgent,
         'lcccir': LCCCIRAgent,
     }

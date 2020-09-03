@@ -52,7 +52,6 @@
 - [x] 发现huggingface/transformers的BertTokenize的bug
 - [ ] 测试检索加强的GPT2
 - [x] 生成模型sample出来的多个句子可以用来作为检索式模型粗筛的query集合
-- [ ] 测试互助学习
 - [x] 重新整理Elasticsearch的内容，避免出现类似"图片评论"这类无用的回复
 - [x] batch版本的强化学习，并验证reward提升的效果
 - [ ] 强化学习的reward函数需不需要gamma考虑远程的奖励，考虑远程的奖励的话可能会带来负面的效应，尝试只使用当前的step的奖励作为最终奖励
@@ -60,7 +59,7 @@
 - [ ] MultiView的评价指标在强化学习中会严重的降低速度，可以考虑构建一个模型来评价多个角度，提高速度和效率(一个BERT编码层和多个任务头: 一致性头，兼容性头，流畅性头，安全性头[安全性就是一致性])
 - [x] 重新检查 dataloader 里面的截断处理是对context左截短，response右截断
 - [x] Multi-view参考一下 AAAI 2020: Learning from Easy to Complex: Adaptive Multi-curricula Learning for Neural Dialogue Generation
-- [ ] 生成模型推理阶段不限制长度，知道遇到 [SEP]
+- [x] 生成模型推理阶段不限制长度，知道遇到 [SEP]
 - [x] 将一个多轮对话的session全部记录下来，避免检索式对话系统多次选择重复的回复
 - [ ] 通过对检索式对话系统进行分析发现，检索式对话系统很容易对一些逻辑错误的候选回复给予非常h高的分数，仅仅是因为出现了和上下文主题类似的单词，比如，“你喜欢什么类型的电影”，“我喜欢打乒乓球”的分数是0.9687，但是"我知道打乒乓球"的分数是0.1595可见，模型根据单词“喜欢”就给候选回复一个非常搞的分数，这是不合理的。
 - [x] topk,topp对测试阶段生成的文本质量影响很大，topk越小，搜索空间越小，质量越好
@@ -76,11 +75,15 @@
 - [x] 对Elasticsearch使用filter过滤机制，提高检索模型的Topic准确度，这一点针对于SMP-MCC 2020 比赛设计
 - [ ] 设计keywords GPT2生成模型，分为三阶段训练，context; keywords; response，其中keywords极端可以之后用来做强化学习
 - [ ] 检验when2talk
-- [ ] 检验gpt2retrieval，查看检索式模型是否可以有效增强生成模型的效果，和kwgpt2做对比看看，如果kwgpt2效果更好那就不用gpt2retrieval模型了，因为gpt2retrieval模型在训练之前还需要大量的实践收集对应的检索式对话候选回复用来做先验条件
+- [x] 检验gpt2retrieval，查看检索式模型是否可以有效增强生成模型的效果，和kwgpt2做对比看看，如果kwgpt2效果更好那就不用gpt2retrieval模型了，因为gpt2retrieval模型在训练之前还需要大量的实践收集对应的检索式对话候选回复用来做先验条件
 - [x] 使用 Micro and Macro Distinct 作为 multiview 的额外评价指标
 - [x] trigger sentence 合并到当前的句子上下文的后面，用来加强topic信息
 - [x] bm25筛选负样本训练检索式对话效果有提升
 - [x] 生成式模型需要添加speaker embedding，保证生成的句子是对上文query的回应，而不是单纯的语言模型采样的结果。这一点再CDial-GPT(LCCC)的论文和代码里面介绍有。
 - [x] bertmcf, bertmc 并不比 bertretrieval 好
-- [ ] LCCC-GPT 这个工作已经充分说明了大规模预训练可以一定程度上解决对话的流畅性问题了，但是生成的结果依然比较单一，缺乏多样性（相比于检索式对话系统），借鉴BERT和ERNIE引入的知识的方法，如何在大规模预训练的GPT生成式对话模型中加入知识是一个非常好的问题，可以做一下。可以参考华为的ZEN和清华的ERNIE。但是这需要解决一个问题，在开放域对话系统，需要知识的情况比较少，也就是相对来说知识的密度比较稀疏，如何有效的利用稀疏的知识数据是非常关键的。
+- [ ] LCCC-GPT 这个工作已经充分说明了大规模预训练可以一定程度上解决对话的流畅性问题了，但是生成的结果依然比较单一，缺乏多样性（相比于检索式对话系统），借鉴BERT和ERNIE引入的知识的方法，如何在大规模预训练的GPT生成式对话模型中加入知识是一个非常好的问题，可以做一下。可以参考华为的ZEN和清华的ERNIE。但是这需要解决一个问题，在开放域对话系统，需要知识的情况比较少，也就是相对来说知识的密度比较稀疏，如何有效的利用稀疏的知识数据是非常关键的(可以考虑使用检索式对话系统的结果作为补充的信息和知识，架构借鉴ERNIE)。这个想法和检索加强的生成模型的区别：
+    * 使用了更强的bert-based精排检索模型，保证知识（额外的信息）是有效的
+    * 以往的检索加强生成式都是RNN-based，这是第一个基于transformer-based的预训练知识加强的生成模型
+    * 设计新颖的架构保证知识信息的注入（similar to ERNIE）
 - [ ] 检索式模型很难区分样本的质量，要么就是0.999要么就是0.001的分数，但是实际上，每个样本对于上下文存在一个符合的程度，如果不区分程度的话，两个样本如果都是0.999很难区分他们好的质量，从而容易选出错误的候选样本，为了解决这个问题，提出使用使用multiview的方式对正样本和负样本进行soft重打分的册率做回归，baseline是用naturalness方式negative aspect训练的二分类模型，multiview soft重打分也是用naturalness的方法作为负样本，并在automatic dialog evaluation和generation rerank方面测试。
+- [x] LCCC的GPT2模型训练retrieval dialog system效果不好

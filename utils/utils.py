@@ -7,6 +7,8 @@ def collect_parameter_4_model(args):
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'lcccir':
         return (args['multi_gpu'],), {'run_mode': args['mode']}
+    elif args['model'] == 'lccc':
+        return (args['multi_gpu'],), {'run_mode': args['mode']}
     elif args['model'] == 'bertmc':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang'], 'model_type': 'mc'}
     elif args['model'] == 'bertmcf':
@@ -26,7 +28,7 @@ def collect_parameter_4_model(args):
     elif args['model'] == 'seq2seq':
         return (args['vocab_size'], args['vocab']), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'gpt2':
-        return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang']}
+        return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
     elif args['model'] == 'pfgpt2':
         return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'kwgpt2':
@@ -114,6 +116,7 @@ def read_text_data_nosep(path):
         return nd
 
 def read_text_data_sep(path):
+    '''For LCCC Corpus'''
     with open(path) as f:
         data = f.read().split('\n\n')
         data = [i.split('\n') for i in data if i.strip()]

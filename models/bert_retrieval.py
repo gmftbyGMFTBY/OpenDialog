@@ -6,7 +6,7 @@ class BERTRetrieval(nn.Module):
         super(BERTRetrieval, self).__init__()
         self.model = BertForSequenceClassification.from_pretrained(
                 model,
-                num_labels=2)
+                num_labels=1)
 
     def forward(self, inpt):
         '''
@@ -16,7 +16,7 @@ class BERTRetrieval(nn.Module):
         output = self.model(
                 input_ids=inpt,
                 attention_mask=attn_mask)
-        logits = output[0]    # [batch, 2]
+        logits = output[0].squeeze(1)    # [batch, 1] -> [batch]
         return logits 
     
 class BERTRetrievalDISAgent(RetrievalBaseAgent):
@@ -316,8 +316,9 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         
         # self.model = DataParallel(self.model, device_ids=self.gpu_ids)
         # bert model is too big, try to use the DataParallel
-        self.criterion = nn.CrossEntropyLoss()
-        self.criterion_ = nn.CrossEntropyLoss(reduction='none')
+        # self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.MSELoss()
+        self.criterion_ = nn.MSELoss(reduction='none')
         self.show_parameters(self.args)
 
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
@@ -328,8 +329,9 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         for idx, batch in enumerate(pbar):
             # label: [batch]
             cid, label = batch
+            label = label.float()
             self.optimizer.zero_grad()
-            output = self.model(cid)    # [batch, 2]
+            output = self.model(cid)    # [batch]
             loss = self.criterion(
                     output, 
                     label.view(-1))
@@ -344,8 +346,9 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             total_loss += loss.item()
             batch_num += 1
             
-            now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
-            now_correct = torch.sum(now_correct == label).item()
+            now_correct = torch.sum((output > 0.5) == label).item()
+            # now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
+            # now_correct = torch.sum(now_correct == label).item()
             correct += now_correct
             s += len(label)
             
@@ -392,14 +395,15 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         with torch.no_grad():
             for idx, batch in enumerate(pbar):
                 cid, label = batch
-                output = self.model(cid)
+                label = label.float()    # regression 
+                output = self.model(cid)    # [batch]
                 loss = self.criterion(output, label.view(-1))
                 total_loss += loss.item()
                 batch_num += 1
 
                 # output: [batch, 2]
                 # only use the positive score as the final score
-                output = F.softmax(output, dim=-1)[:, 1]    # [batch]
+                # output = F.softmax(output, dim=-1)[:, 1]    # [batch]
 
                 preds = [i.tolist() for i in torch.split(output, self.args['samples'])]
                 labels = [i.tolist() for i in torch.split(label, self.args['samples'])]

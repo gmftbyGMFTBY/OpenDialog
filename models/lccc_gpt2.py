@@ -1,4 +1,5 @@
 from .header import *
+from .bert_retrieval import BERTRetrieval
 
 class LCCC(nn.Module):
     
@@ -6,11 +7,14 @@ class LCCC(nn.Module):
         super(LCCC, self).__init__()
         self.model = OpenAIGPTLMHeadModel.from_pretrained(pretrained_path)
         self.vocab = BertTokenizer.from_pretrained(pretrained_path, do_lower_case=True)
-        self.unk_id, self.sep_id = self.vocab.convert_tokens_to_ids('[UNK]'), self.vocab.convert_tokens_to_ids('[SEP]')
-        self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
         self.topk, self.topp = topk, topp
         self.SPECIAL_TOKENS = ["[CLS]", "[SEP]", "[speaker1]", "[speaker2]"]
-        
+    
+    def forward(self, inpt_ids, token_type_ids):
+        output = self.model(inpt_ids, token_type_ids=token_type_ids)[0]    # [B, S, V]
+        return output
+    
+    # ========== Following functions are used for test mode    
     def build_input_from_segments(self, history, response, with_eos=True):
         '''borrow from the thu-coai/CDial-GPT'''
         bos, eos, speaker1, speaker2 = self.vocab.convert_tokens_to_ids(self.SPECIAL_TOKENS)
@@ -90,6 +94,227 @@ class LCCC(nn.Module):
                 break
         return current_output
     
+# ========= ========== #
+class LCCCRLAgent(BaseAgent):
+    
+    '''Reinforcement Learning Fine-tuning LCCC on the given open-domain dialog corpus'''
+    
+    def __init__(self, multi_gpu, run_mode='test'):
+        super(LCCCRLAgent, self).__init__()
+        try:
+            self.gpu_ids = list(range(len(multi_gpu.split(','))))
+        except:
+            raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
+        self.args = {
+            'tgt_len_size': 50,
+            'grad_clip': 1.0,
+            'topk': 0,
+            'topp': 0.9,
+            'unk': -1,   # For LCCD GPT
+            'temperature': 0.7,
+            'pretrained_path': '/home/lt/data/LCCD_GPT',
+            'multi_gpu': self.gpu_ids,
+            'run_mode': run_mode,    # test / rerank
+            'samples': 16,
+            'lr': 1e-5,
+            'amp_level': 'O2',
+            'lang': 'zh',
+        }
+        self.model = LCCCRL()
+        
+    def train_model(self, train_iter):
+        pass
+    
+class LCCCFTAgent(BaseAgent):
+    
+    '''
+    Supervised Fine-tuning LCCC on the given open-domain dialog corpus
+    '''
+    
+    def __init__(self, multi_gpu, run_mode='test'):
+        super(LCCCFTAgent, self).__init__()
+        try:
+            self.gpu_ids = list(range(len(multi_gpu.split(','))))
+        except:
+            raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
+        self.args = {
+            'tgt_len_size': 50,
+            'grad_clip': 1.0,
+            'topk': 0,
+            'topp': 0.9,
+            'unk': -1,   # For LCCD GPT
+            'temperature': 0.7,
+            'pretrained_path': '/home/lt/data/LCCD_GPT',
+            'multi_gpu': self.gpu_ids,
+            'run_mode': run_mode,    # test / rerank
+            'samples': 16,
+            'lr': 1e-5,
+            'amp_level': 'O2',
+            'lang': 'zh',
+        }
+        self.model = LCCC(
+            self.args['pretrained_path'],
+            self.args['topk'], 
+            self.args['topp'],
+        )
+        if torch.cuda.is_available():
+            self.model.cuda()
+        # For LCCD GPT, -1 token is [UNK], which is used for padding
+        self.criterion = nn.CrossEntropyLoss(ignore_index=-1)
+        self.optimizer = transformers.AdamW(
+            self.model.parameters(),
+            lr=self.args['lr'], 
+            correct_bias=True
+        )
+        self.model, self.optimizer = amp.initialize(
+            self.model, 
+            self.optimizer, 
+            opt_level=self.args['amp_level'],
+        )
+        
+        # use the BERTRetrieval model as the reranker
+        if self.args['run_mode'] == 'rerank':
+            from multiview.multiview import MultiView
+            print(f'[!] MultiView reranker model will be initized')
+            self.reranker = MultiView(
+                topic=False,
+                length=False,
+                nidf_tf=False,
+                coherence=True,
+                fluency=False,
+                repetition_penalty=False,
+                mmi=False,
+                distinct=False,
+                mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
+                coherence_path='ckpt/zh50w/bertretrieval/best.pt',
+                topic_path='ckpt/fasttext/model.bin',
+                fluency_path='ckpt/LM/gpt2lm/best.pt',
+            )
+            print(f'[!] load multiview model over')
+        self.show_parameters(self.args)
+        
+    def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
+        self.model.train()
+        total_loss, total_acc, batch_num = 0, [], 0
+        pbar = tqdm(train_iter)
+        for idx, batch in enumerate(pbar):
+            input_ids, token_type_ids, labels = batch
+            self.optimizer.zero_grad()
+            
+            output = self.model(input_ids, token_type_ids)
+            output = output[..., :-1, :].contiguous()
+            labels = labels[..., 1:].contiguous()
+            loss = self.criterion(
+                output.view(-1, output.size(-1)),
+                labels.view(-1),
+            )
+            
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+            clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
+            # loss.backward()
+            # clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+            self.optimizer.step()
+            
+            # statis
+            _, preds = output.max(dim=-1)    # [B, S]
+            not_ignore = labels.ne(self.args['unk'])   # pad is 0 or 1
+            num_targets = not_ignore.long().sum().item()    # the number of not pad tokens
+            correct = (labels == preds) & not_ignore
+            correct = correct.float().sum()
+            accuracy = correct / num_targets
+            total_acc.append(accuracy.item())
+            total_loss += loss.item()
+            batch_num += 1
+            
+            # tfrecoder
+            total_acc_ = np.mean(total_acc)
+            total_loss_ = total_loss/batch_num
+            loss = loss.item()
+            accuracy = accuracy.item()
+            recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss_, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunTokenAcc', accuracy, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/TokenAcc', total_acc_, idx)
+            
+            pbar.set_description(f'[!] loss(run|overall): {round(loss, 4)}|{round(total_loss_, 4)}, token acc(run|overall): {round(accuracy, 4)}|{round(total_acc_, 4)}')
+        recoder.add_scalar(f'train-Whole/TokenAcc', np.mean(total_acc), idx_)
+        recoder.add_scalar(f'train-Whole/Loss', total_loss/batch_num, idx_)
+        return round(total_loss_, 4)
+    
+    @torch.no_grad()
+    def test_model(self, test_iter, path):
+        '''batch size is 1'''
+        self.model.eval()
+        pbar = tqdm(test_iter)
+        with open(path, 'w') as f:
+            for batch in pbar:
+                input_ids, ref, _ = batch
+                max_size = max(len(ref), self.args['tgt_len_size'])
+                tgt = self.model.predict(
+                    input_ids, 
+                    max_size, 
+                    temperature=self.args['temperature'],
+                    min_length=1,
+                )
+                tgt = self.model.vocab.convert_ids_to_tokens(tgt)
+                tgt = ''.join(tgt)
+                
+                ref = self.model.vocab.convert_ids_to_tokens(ref)
+                ref = ''.join(ref)
+                
+                # batch size is 1, so input_ids[0] is needed
+                ctx = self.model.vocab.convert_ids_to_tokens(input_ids[0])
+                ctx = ''.join(ctx).replace('[PAD]', '')
+
+                f.write(f'CTX: {ctx}\n')
+                f.write(f'REF: {ref}\n')
+                f.write(f'TGT: {tgt}\n\n')
+        print(f'[!] translate test dataset over, write into {path}')
+        # measure the performance
+        (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])
+        print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Length(max, min, avg): {c_max_l}/{c_min_l}/{c_avg_l}|{r_max_l}/{r_min_l}/{r_avg_l}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
+        
+    def tokenize_(self, obj):
+        '''borrow from thu-coai/CDial-GPT'''
+        return self.model.vocab.convert_tokens_to_ids(self.model.vocab.tokenize(obj))
+    
+    @torch.no_grad()
+    def talk(self, topic, msgs, maxlen=50, batch_size=32):
+        self.model.eval()
+        if self.args['run_mode'] == 'test':
+            msgs = [self.tokenize_(msgs)]
+            tgt = self.model.predict(
+                msgs,
+                maxlen,
+                temperature=self.args['temperature'],
+                min_length=1,
+            )
+            tgt = self.model.vocab.convert_ids_to_tokens(tgt)
+            tgt = ''.join(tgt)
+            return tgt
+        else:    # rerank run mode
+            msgs_ = [self.tokenize_(msgs)] * self.args['samples']
+            tgts = self.model.predict_batch(
+                msgs_, maxlen, temperature=self.args['temperature']
+            )
+            rest = []
+            for i in tgts:
+                i = self.model.vocab.convert_ids_to_tokens(i)
+                i = ''.join(i)
+                if '[SEP]' in i:
+                    i = i[:i.index('[SEP]')]
+                rest.append(i)
+            # rerank
+            scores = self.reranker([msgs]*len(rest), rest, topic=None)[0]
+            index = np.argmax(scores)
+            response = rest[index]
+            return response
+        
+# ========== ========== #
+
+    
+# ======== Only for Flask server ========== #
 class LCCCAgent(BaseAgent):
     
     def __init__(self, multi_gpu, run_mode='test'):
@@ -115,7 +340,6 @@ class LCCCAgent(BaseAgent):
         )
         
         # use the BERTRetrieval model as the reranker
-        # i am tired, just random sample one candidate, test the predict_batch
         if self.args['run_mode'] == 'rerank':
             from multiview.multiview import MultiView
             print(f'[!] MultiView reranker model will be initized')
@@ -150,7 +374,7 @@ class LCCCAgent(BaseAgent):
         if self.args['run_mode'] == 'test':
             msgs = [self.tokenize_(msgs)]
             tgt = self.model.predict(
-                msgs, 
+                msgs,
                 maxlen,
                 temperature=self.args['temperature'],
                 min_length=1,
@@ -176,6 +400,34 @@ class LCCCAgent(BaseAgent):
             response = rest[index]
             return response
 
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+# ========== Discard ========== #
 # ========== LCCC IR ========== #
 class LCCCIR(nn.Module):
     
@@ -185,8 +437,6 @@ class LCCCIR(nn.Module):
         # binary classification head upon the OpenAIGPTModel (pre-trained)
         self.bs_head = nn.Linear(self.model.config.n_embd, 2)
         self.vocab = BertTokenizer.from_pretrained(pretrained_path, do_lower_case=True)
-        self.unk_id, self.sep_id = self.vocab.convert_tokens_to_ids('[UNK]'), self.vocab.convert_tokens_to_ids('[SEP]')
-        self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
         self.topk, self.topp = topk, topp
         self.SPECIAL_TOKENS = ["[CLS]", "[SEP]", "[speaker1]", "[speaker2]"]
         
@@ -305,7 +555,7 @@ class LCCCIRAgent(RetrievalBaseAgent):
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
         '''similar to bertretrieval model (binary classification)'''
         self.model.train()
-        total_loss, total_acc, batch_num = 0, [], 0
+        total_loss, total_acc, batch_num, correct, s = 0, [], 0, 0, 0
         pbar = tqdm(train_iter)
         for idx, batch in enumerate(pbar):
             # [B, S]; [B, S]; [B]
