@@ -138,14 +138,14 @@ class When2talkDataset(Dataset):
     
 # ========== LCCC-GPT2 ========== #
 # For LCCC IR Model, fine tuning the LCCC GPT2 model for retrieval dialog systems
-class WBDataset(Dataset):
+class UNIDataset(Dataset):
 
-    def __init__(self, vocab, path, samples=1, max_history=5, batch_first=True):
+    def __init__(self, vocab, path, samples=1, max_history=5, batch_first=True, uni=False):
         self.tokenizer = BertTokenizer.from_pretrained(vocab)
         self.max_history = max_history
         self.pad = self.tokenizer.pad_token_id
         self.batch_first = batch_first
-        self.pp_path = f'{os.path.splitext(path)[0]}_lcccir.pt'
+        self.pp_path = f'{os.path.splitext(path)[0]}_uni.pt'
         
         # load the dataset
         if os.path.exists(self.pp_path):
@@ -153,26 +153,29 @@ class WBDataset(Dataset):
             print(f'[!] load preprocessed file from {self.pp_path}')
         else:
             with open(path, 'r', encoding='utf-8') as f:
-                dataset = read_text_data_sep(path)
+                dataset = read_lccc_data(path, debug=True)
+                # ipdb.set_trace()
                 responses = [i[-1] for i in dataset]
                 dataset = [self.tokenize_(item) for item in tqdm(dataset)]
                 self.data = []
                 # construct the negative samples and positive samples
                 for dialog in tqdm(dataset):
-                    context, response = dialog[:-1], dialog[-1]
-                    negatives = generate_negative_samples(
-                        response, 
-                        responses, 
-                        samples=samples
-                    )
+                    bundle = {'context': dialog}
+                    # context, response = dialog[:-1], dialog[-1]
+                    # negatives = generate_negative_samples(
+                    #     response, 
+                    #     responses, 
+                    #     samples=samples
+                    # )
                     # tokenize negative samples
-                    negatives = self.tokenize_(negatives)
-                    for i, r in enumerate([response] + negatives):
-                        bundle = {
-                            'context': context + [r],
-                            'label': 1 if i == 0 else 0,
-                        }
-                        self.data.append(bundle)
+                    # negatives = self.tokenize_(negatives)
+                    # for i, r in enumerate([response] + negatives):
+                    #     bundle = {
+                    #         'context': context + [r],
+                    #         'label': 1 if i == 0 else 0,
+                    #     }
+                    # bundle = {'context': context + [response]}
+                    self.data.append(bundle)
                 print(f'[!] collect {len(self.data)} samples for training')
             torch.save(self.data, self.pp_path)
             print(f'[!] process the dataset and write it into {self.pp_path}')
@@ -188,32 +191,47 @@ class WBDataset(Dataset):
     def __getitem__(self, index):
         history = self.data[index]['context'][-2 * self.max_history:-1]
         resposne = self.data[index]['context'][-1]
-        label = self.data[index]['label']
-        return self.process(history, resposne, label)
+        # label = self.data[index]['label']
+        return self.process(history, resposne)
 
-    def process(self, history, resposne, label, with_eos=True):
+    def process(self, history, resposne, with_eos=True):
         bos, eos, speaker1, speaker2 = self.tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
         sequence = [[bos]] + history + [resposne + ([eos] if with_eos else [])]
         sequence = [sequence[0]] + [[speaker2 if i % 2 else speaker1] + s
                                     for i, s in enumerate(sequence[1:])]
         instance = {}
-        instance["input_ids"] = list(chain(*sequence))
+        instance["input_ids"] = list(chain(*sequence))[-512:]
         instance["token_type_ids"] = [bos] + [speaker2 if i % 2 else speaker1 for i, s in
                                               enumerate(sequence[1:])
                                               for _ in s]
-        instance["label"] = label
-        return instance
+        instance["token_type_ids"] = instance["token_type_ids"][-512:]
+        # if label == 0:
+        #     # negative samples donot do the language model training
+        #     instance["lm_labels"] = [-1] * len(instance["input_ids"])
+        # else:
+        instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:]
+        instance["lm_labels"] = instance["lm_labels"][-512:]
+        # instance["label"] = label
+        return instance;
 
     def collate(self, batch):
         input_ids = pad_sequence(
             [torch.tensor(instance["input_ids"], dtype=torch.long) for instance in batch],
-            batch_first=self.batch_first, padding_value=self.pad)
+            batch_first=self.batch_first, padding_value=self.pad
+        )
         token_type_ids = pad_sequence(
             [torch.tensor(instance["token_type_ids"], dtype=torch.long) for instance in batch],
-            batch_first=self.batch_first, padding_value=self.pad)
-        labels = torch.LongTensor([instance['label'] for instance in batch])
-        # [B, S]; [B, S]; [B]
-        return input_ids, token_type_ids, labels
+            batch_first=self.batch_first, padding_value=self.pad
+        )
+        # labels = torch.LongTensor([instance['label'] for instance in batch])
+        lm_labels = pad_sequence(
+            [torch.tensor(instance["lm_labels"], dtype=torch.long) for instance in batch],
+            batch_first=self.batch_first, padding_value=-1
+        )
+        # if torch.cuda.is_available():
+        #     input_ids, token_type_ids, lm_labels = input_ids.cuda(), token_type_ids.cuda(), lm_labels.cuda()
+        # [B, S]; [B, S]; [B, S]
+        return input_ids, token_type_ids, lm_labels
 # ========== LCCC-GPT2 ========== #
 
 class GPT2Dataset(Dataset):
@@ -898,7 +916,8 @@ class BERTIRDataset(Dataset):
         self.max_len = max_len 
         self.soft_label = soft_label
         # data = read_csv_data(path)
-        data = read_text_data(path)
+        # data = read_text_data(path)
+        data = read_lccc_data(path, debug=False)
         # context and response are all the negative samples 
         responses = [i[1] for i in data]
         # self.vocab = BertTokenizer(vocab_file=vocab_file)
@@ -911,73 +930,24 @@ class BERTIRDataset(Dataset):
             return None
         self.data = []
         
-        # collect the data samples
         d_ = []
-        self.prepare_diversity(path)
-        self.prepare_fluency(path)
-        self.prepare_bm25('naturalness')
-        self.prepare_bm25('relatedness')
-        print(f'[!] prepare over')
-          
-        with tqdm(total=len(data)) as pbar:
-            idx, bsz = 0, 128
-            while idx < len(data):
-                items = data[idx:idx+bsz]
-                bsz_ = len(items)
-                contexts_, responses_ = [i[0] for i in items], [i[1] for i in items]
-                
-                ran = random.random()
-                if negative_aspect == 'coherence':
-                    # test mode use the random negative samples for checking the performance
-                    ran = 0
-                elif negative_aspect == 'naturalness':
-                    ran = 0.7
-                elif negative_aspect == 'hard':
-                    ran = 0.9
-                else:
-                    pass
-                
-                if 0 <= ran < 0.2: 
-                    # coherence
-                    for c, response in zip(contexts_, responses_):
-                        negative = generate_negative_samples(
-                            response, responses, samples=samples
-                        )
-                        d_.append((c, [response] + negative, 'coherence'))
-                elif 0.2 <= ran < 0.4:
-                    # fluency
-                    for c, response in zip(contexts_, responses_):
-                        # response = random.sample(responses, 1)[0]
-                        negative = generate_negative_samples_fluency(response, samples=samples, vocab=self.vocabs, ratio=0.3)
-                        d_.append((c, [response] + negative, 'fluency'))
-                elif 0.4 <= ran < 0.6:
-                    # diversity
-                    for c, response in zip(contexts_, responses_):
-                        negative = generate_negative_samples_diversity(response, self.diversity_negative, samples=samples)
-                        d_.append((c, [response] + negative, 'diveristy'))
-                elif 0.6 <= ran < 0.8:
-                    # naturalness
-                    negatives = generate_negative_samples_naturalness(contexts_, samples=samples, bm25Model=self.eschator, pool_size=128)
-                    for c, r, n in zip(contexts_, responses_, negatives):
-                        d_.append((c, [r] + n, 'naturalness'))
-                elif 0.8 <= ran < 1.0:
-                    # relatedness
-                    negatives = generate_negative_samples_relatedness(contexts_, samples=samples, bm25Model=self.eschator, pool_size=64, w2v=self.w2v, embedding_function=convert_text_embedding)
-                    for c, r, n in zip(contexts_, responses_, negatives):
-                        d_.append((c, [r] + n, 'relatedness'))
-                else:
-                    pass
-                idx += bsz_
-                pbar.update(bsz_)
+        for item in tqdm(data):
+            context, response = item[:-1], item[-1]
+            context = ' [SEP] '.join(context)
+            negative = generate_negative_samples(
+                response, responses, samples=samples
+            )
+            d_.append((context, [response] + negative))
         
         if mode in ['train', 'dev']:
-            # concatenate the context and the response
-            for context, response, _ in tqdm(d_):
+            for context, response in tqdm(d_):
                 context_id = self.vocab.encode(context)
+                token_type_ids = [1] * len(context_id)
                 for idx, r in enumerate(response):
                     bundle = dict()
                     rid = self.vocab.encode(r)
                     bundle['context_id'] = context_id + rid[1:]
+                    bundle['token_type_id'] = token_type_ids + [0] * len(rid[1:])
                     bundle['label'] = 1 if idx == 0 else 0
                     self.data.append(bundle)
         else:
@@ -990,48 +960,6 @@ class BERTIRDataset(Dataset):
                 bundle['reply_id'] = res_ids
                 bundle['label'] = [1] + [0] * samples
                 self.data.append(bundle)
-    
-    def prepare_diversity(self, path):
-        # PROCESS ALL THE DATASET AND FIND THE TOP-10000 in-diversity samnples
-        diversity_path = f'{os.path.split(path)[0]}/diversity_scores.pkl'
-        if os.path.exists(diversity_path):
-            with open(diversity_path, 'rb') as f:
-                diversity_scores, responses_ = pickle.load(f)
-            print(f'[!] load pre-trained diversity scores')
-        else:
-            NIDF = NIDF_TF()
-            responses_ = random.sample(responses, 50000)
-            idx, bsz_diveristy, diversity_scores = 0, 512, []
-            with tqdm(total=len(responses_)) as pbar:
-                while idx < len(responses_):
-                    samples_ = responses_[idx:idx+bsz_diveristy]
-                    bsz_ = len(samples_)
-                    diversity_scores.extend(NIDF.scores(samples_, topk=5))
-                    pbar.update(bsz_)
-                    idx += bsz_
-            with open(diversity_path, 'wb') as f:
-                pickle.dump((diversity_scores, responses_), f)
-            print(f'[!] save the pre-trained diversity scores into {diversity_path}')
-        sort_index = np.argsort(diversity_scores)[:1000]
-        self.diversity_negative = [responses_[i] for i in sort_index]
-        
-    def prepare_fluency(self, path):
-        vocab_path = f'{os.path.split(path)[0]}/fluency_vocab.pkl'
-        if os.path.exists(vocab_path):
-            with open(vocab_path, 'rb') as f:
-                self.vocabs = pickle.load(f)
-            print('[!] load preprosed vocab file for fluency perturbation')
-        else:
-            print(f'[!] begin to collect the vocabs for the fluency perturbation')
-            self.vocabs = make_vocabs(responses)
-            with open(vocab_path, 'wb') as f:
-                pickle.dump(self.vocabs, f)
-            print(f'[!] save the vocabs in {vocab_path}')
-            
-    def prepare_bm25(self, negative_aspect):
-        self.eschator = ESChat('zh50w_database', kb=False)
-        if negative_aspect == 'relatedness':
-            self.w2v = load_w2v('data/chinese_w2v')
 
     def __len__(self):
         return len(self.data)
@@ -1039,13 +967,14 @@ class BERTIRDataset(Dataset):
     def __getitem__(self, i):
         bundle = self.data[i]
         if self.mode in ['train', 'dev']:
-            ids = torch.LongTensor(bundle['context_id'][-self.max_len:])
+            context_ids = torch.LongTensor(bundle['context_id'][-self.max_len:])
+            token_type_ids = torch.LongTensor(bundle['token_type_id'][-self.max_len:])
         else:
             ids = []
             for i in range(len(bundle['reply_id'])):
                 p = bundle['context_id'] + bundle['reply_id'][i][1:]
                 ids.append(torch.LongTensor(p[-self.max_len:]))
-        return ids, bundle['label'] 
+        return context_ids, token_type_ids, bundle['label'] 
     
     def save_pickle(self):
         with open(self.pp_path, 'wb') as f:
@@ -1786,6 +1715,139 @@ class PONEDataset(Dataset):
         with open(self.pp_path, 'wb') as f:
             pickle.dump(self.data, f)
         print(f'[!] save dataset into {self.pp_path}')
+        
+class TransformerDataset(Dataset):
+    
+    def __init__(self, path, mode='train', lang='zh'):
+        self.mode = mode
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
+        
+        self.pp_path = f'{os.path.splitext(path)[0]}_trs.pt'
+        if os.path.exists(self.pp_path):
+            self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        
+        with open(path, 'r', encoding='utf-8') as f:
+            dataset = read_text_data(path)
+            sample_size = 500000 if self.mode == 'train' else 10000
+            dataset = random.sample(dataset, sample_size)
+            responses = [i[-1] for i in dataset]
+            contexts = [' [SEP] '.join(i[:-1]) for i in dataset]
+            self.data = []
+            for context, response in tqdm(list(zip(contexts, responses))):
+                rid = self.vocab.encode(response)
+                rid_pos = np.arange(1, 1 + len(rid))
+                cid = self.vocab.encode(context)
+                cid_pos = np.arange(1, 1 + len(cid))
+                bundle = {
+                    'cid': cid,
+                    'cid_pos': cid_pos,
+                    'rid': rid,
+                    'rid_pos': rid_pos,
+                }
+                self.data.append(bundle)
+            print(f'[!] collect {len(self.data)} samples for training')
+            torch.save(self.data, self.pp_path)
+            print(f'[!] process the dataset and write it into {self.pp_path}')
+            
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, i):
+        return self.data[i]
+    
+    def collate(self, batch):
+        src = pad_sequence(
+            [torch.tensor(instance['cid'], dtype=torch.long) for instance in batch],
+            batch_first=False, padding_value=self.pad_id,
+        )
+        src_pos = pad_sequence(
+            [torch.tensor(instance['cid_pos'], dtype=torch.long) for instance in batch],
+            batch_first=False, padding_value=self.pad_id,
+        )
+        trg = pad_sequence(
+            [torch.tensor(instance['rid'], dtype=torch.long) for instance in batch],
+            batch_first=False, padding_value=self.pad_id,
+        )
+        trg_pos = pad_sequence(
+            [torch.tensor(instance['rid_pos'], dtype=torch.long) for instance in batch],
+            batch_first=False, padding_value=self.pad_id,
+        )
+        trg_mask, src_key_padding_mask, trg_key_padding_mask, memory_key_padding_mask = get_masks(
+            src, trg, PAD=self.pad_id)
+        if torch.cuda.is_available():
+            src, src_pos = src.cuda(), src_pos.cuda()
+            trg, trg_pos = trg.cuda(), trg_pos.cuda()
+            trg_mask = trg_mask.cuda()
+            src_key_padding_mask = src_key_padding_mask.cuda()
+            trg_key_padding_mask = trg_key_padding_mask.cuda()
+            memory_key_padding_mask = memory_key_padding_mask.cuda()
+        return src, trg, src_pos, trg_pos, trg_mask, src_key_padding_mask, trg_key_padding_mask, memory_key_padding_mask
+        
+class BERTNADataset(Dataset):
+    
+    def __init__(self, path, mode='train', lang='zh', max_size=16):
+        self.mode = mode
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
+        self.mask_id = self.vocab.convert_tokens_to_ids('[MASK]')
+        self.sep_id = self.vocab.convert_tokens_to_ids('[SEP]')
+        self.cls_id = self.vocab.convert_tokens_to_ids('[CLS]')
+        self.max_size = max_size
+        # keywords parameters
+        # self.allowPOS = ['n', 'nr', 'nz', 'PER', 'LOC', 'ORG', 
+        #                  'ns', 'nt', 'nw', 'vn', 's']
+        self.topk = 5
+        
+        self.pp_path = f'{os.path.splitext(path)[0]}_na.pt'
+        if os.path.exists(self.pp_path):
+            self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        
+        with open(path, 'r', encoding='utf-8') as f:
+            dataset = read_text_data(path)
+            sample_size = 500000 if self.mode == 'train' else 10000
+            dataset = random.sample(dataset, sample_size)
+            responses = [' [SEP] '.join(analyse.extract_tags(i[-1], topK=self.topk)) for i in tqdm(dataset)]
+            contexts = [i[0] for i in dataset]
+            self.data = []
+            for context, response in tqdm(list(zip(contexts, responses))):
+                rid = self.vocab.encode(response)[1:-1]    # ignore the [CLS] and [SEP]
+                cid = self.vocab.encode(context)[1:]    # ignore the [CLS]
+                if len(rid) >= self.max_size:
+                    labels = [self.cls_id] + rid[:self.max_size] + [self.sep_id] + [self.pad_id] * len(cid)
+                else:
+                    labels = [self.cls_id] + rid + [self.sep_id] + [self.pad_id] * (self.max_size - len(rid)) + [self.pad_id] * len(cid)
+                ids = [self.cls_id] + [self.mask_id] * self.max_size + [self.sep_id] + cid
+                bundle = {
+                    'ids': ids[:512],
+                    'labels': labels[:512],
+                }
+                self.data.append(bundle)
+            print(f'[!] collect {len(self.data)} samples for training')
+            torch.save(self.data, self.pp_path)
+            print(f'[!] process the dataset and write it into {self.pp_path}')
+            
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, i):
+        return self.data[i]
+    
+    def collate(self, batch):
+        inpt_ids = pad_sequence(
+            [torch.tensor(instance['ids'], dtype=torch.long) for instance in batch],
+            batch_first=True, padding_value=self.pad_id,
+        )
+        labels = pad_sequence(
+            [torch.tensor(instance['labels'], dtype=torch.long) for instance in batch],
+            batch_first=True, padding_value=self.pad_id,
+        )
+        return inpt_ids, labels
+        
 
 if __name__ == "__main__":
     # ========== PONE ========== #
@@ -1836,7 +1898,7 @@ if __name__ == "__main__":
     # train_data = BERTNLIDataset('data/NLI/cnsd_snli_v1.0.train.jsonl', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=nli_collate_fn)
     # ========== LCCC ========== #
-    train_data = WBDataset('data/config/LCCC', 'data/LCCC/LCCC-base.json')
+    train_data = UNIDataset('/data/lantian/data/LCCD_GPT', 'data/LCCC/LCCC-base.json')
     train_iter = DataLoader(train_data, collate_fn=train_data.collate, batch_size=10)
     # ========= ITERATE ========= # 
     for batch in tqdm(train_iter):

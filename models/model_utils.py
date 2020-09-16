@@ -578,6 +578,34 @@ def load_topic_utterances(path):
     print(f'[!] load the topic trigger utterances over')
     return data
 
+from torch.optim.lr_scheduler import _LRScheduler
+class Noam(_LRScheduler):
+    """
+    Implements the Noam Learning rate schedule. This corresponds to increasing the learning rate
+    linearly for the first ``warmup_steps`` training steps, and decreasing it thereafter proportionally
+    to the inverse square root of the step number, scaled by the inverse square root of the
+    dimensionality of the model. Time will tell if this is just madness or it's actually important.
+    Parameters
+    ----------
+    warmup_steps: ``int``, required.
+        The number of steps to linearly increase the learning rate.
+    """
+    def __init__(self, optimizer, warmup_steps, d_model):
+        self.warmup_steps = warmup_steps
+        self.d_model = d_model
+        super(Noam, self).__init__(optimizer)
+        # self.i_step = 0
+
+    def get_lr(self):
+        last_epoch = max(1, self.last_epoch)
+        scale = (self.d_model** -0.5) * min([
+            last_epoch ** (-0.5), 
+            last_epoch * self.warmup_steps ** (-1.5),
+            ])
+
+        # return [base_lr  * scale for base_lr in self.base_lrs]
+        return [base_lr / base_lr * scale for base_lr in self.base_lrs]
+
 if __name__ == "__main__":
     a = torch.LongTensor([
         [1, 2, 4, 5, 7, 0, 0, 0, 0, 0],

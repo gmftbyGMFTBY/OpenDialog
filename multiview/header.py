@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import BertTokenizer
+from transformers import OpenAIGPTLMHeadModel
 from models.bert_retrieval import BERTRetrieval
 from models.bert_retrieval_multi import BERTMULTIVIEW
 from models.gpt2 import GPT2
@@ -22,3 +23,4 @@ import jieba
 import thulac
 from sklearn.feature_extraction.text import CountVectorizer
 from collections import Counter
+from itertools import chain

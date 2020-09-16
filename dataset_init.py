@@ -2,6 +2,13 @@ from header import *
 from utils import *
 from dataloader import *
 
+def load_seq2seq_trs_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    data = TransformerDataset(path, mode=args['mode'], lang=args['lang'])
+    args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
+    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=data.collate)
+    return iter_
+
 def load_seq2seq_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.csv'
     if args['mode'] == 'train':
@@ -78,6 +85,23 @@ def load_lccc_ir_dataset(args):
         iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
     return iter_
 
+def load_bert_na_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    data = BERTNADataset(path, mode=args['mode'], max_size=16)
+    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=data.collate)
+    return iter_
+
+def load_uni_dataset(args):
+    if args['mode'] in ['train']:
+        data = UNIDataset('/data/lantian/data/LCCD_GPT', f'data/{args["dataset"]}/LCCC-base.json', samples=1)
+        args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+        iter_ = DataLoader(data, sampler=train_sampler, batch_size=args['batch_size'], collate_fn=data.collate)
+    else:
+        data = UNIDataset('/home/lt/data/LCCD_GPT', f'data/{args["dataset"]}/LCCC-base_test.json', samples=9)
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=data.collate)
+    return iter_
+
 def load_lccc_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     data = FTWBDataset('/home/lt/data/LCCD_GPT', args['mode'], path)
@@ -88,6 +112,8 @@ def load_gpt2_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:
         data = GPT2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'], reversed=args['mmi'])
+        # NOTE:
+        # train_sampler = torch.utils.data.distributed.DistributedSampler(data)
         args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
         iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=gpt2_train_collate_fn)
     else:
@@ -180,10 +206,12 @@ def load_bert_ir_cl_dataset(args):
     return iter_
 
 def load_bert_ir_dataset(args):
-    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    # path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    path = f'data/{args["dataset"]}/LCCC-base.json'
     if args['mode'] in ['train', 'dev']:
         data = BERTIRDataset(path, mode=args['mode'], samples=1, negative_aspect='coherence')
-        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn, sampler=train_sampler)
     else:
         data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='hard')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)

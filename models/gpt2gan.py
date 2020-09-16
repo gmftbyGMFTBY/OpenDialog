@@ -353,7 +353,7 @@ class GPT2RLAgent(BaseAgent):
             'rl_topp': 1.0,
             'config_path': 'data/config/model_config_dialogue_big.json',
             'vocab_path': vocab_file,
-            'gen_pretrained_model': 'ckpt/train_generative/gpt2/best.pt',
+            'gen_pretrained_model': 'ckpt/zh50w/gpt2/best.pt',
             'rollout_samples': 2,
             'min_token_to_keep': 10,
             'multi_gpu': self.gpu_ids,
@@ -363,6 +363,7 @@ class GPT2RLAgent(BaseAgent):
             'memory_batch_size': 16,
             'memory_ckpt_path': 'ckpt/train_generative_rl/gpt2gan/memory.pkl',
             'lang': lang,
+            'amp_level': 'O2',
         }
         # hyperparameters
         
@@ -386,6 +387,9 @@ class GPT2RLAgent(BaseAgent):
             vocab_path=self.args['vocab_path'],
             memory=self.debug_memory,
         )
+        # CUDA and DataParallel
+        if torch.cuda.is_available():
+            self.model.cuda()
         
         # optimizer
         self.gen_optimizer = optim.Adam(
@@ -398,25 +402,31 @@ class GPT2RLAgent(BaseAgent):
         self.dis_optimizer = transformers.AdamW(
                 self.model.discriminator.parameters(),
                 lr=self.args['dis_lr'])
+        self.model, [self.gen_optimizer, self.gen_mle_optimizer, self.dis_optimizer] = amp.initialize(
+            self.model, 
+            [self.gen_optimizer, self.gen_mle_optimizer, self.dis_optimizer], 
+            opt_level=self.args['amp_level']
+        )
+        # DataParallel
+        if self.args['run_mode'] == 'train':
+            self.model = DataParallel(self.model, device_ids=self.gpu_ids)
         # criterion
         self.dis_criterion = nn.CrossEntropyLoss()
         self.mle_criterion = nn.CrossEntropyLoss(
                 ignore_index=self.args['pad'], reduction='sum')
-        # CUDA and DataParallel
-        if torch.cuda.is_available():
-            self.model.cuda()
-            if self.args['run_mode'] == 'train':
-                self.model = DataParallel(self.model, device_ids=self.gpu_ids)
         self.show_parameters(self.args)
 
     def train_discriminator(self, cid, rid, label):
         self.dis_optimizer.zero_grad()
         output = self.model(cid, rid=rid, mode='dis')    # [batch, 2]
         loss = self.dis_criterion(output, label)
-        loss.backward()
-        clip_grad_norm_(
-                self.model.module.discriminator.parameters(), 
-                self.args['grad_clip'])
+        with amp.scale_loss(loss, self.dis_optimizer) as scaled_loss:
+            scaled_loss.backward()
+        clip_grad_norm_(amp.master_params(self.dis_optimizer), self.args['grad_clip'])
+        # loss.backward()
+        # clip_grad_norm_(
+        #         self.model.module.discriminator.parameters(), 
+        #         self.args['grad_clip'])
         self.dis_optimizer.step()
         
         now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]
@@ -440,10 +450,13 @@ class GPT2RLAgent(BaseAgent):
             for r, p in list(zip(rewards_, probs_)):
                 rl_loss += -torch.log(p) * r
             stepR += np.mean(rewards_.tolist())
-        rl_loss.backward()
-        clip_grad_norm_(
-                self.model.module.generator.parameters(), 
-                self.args['grad_clip'])
+        with amp.scale_loss(rl_loss, self.gen_optimizer) as scaled_loss:
+            scaled_loss.backward()
+        clip_grad_norm_(amp.master_params(self.gen_optimizer), self.args['grad_clip'])
+        # rl_loss.backward()
+        # clip_grad_norm_(
+        #         self.model.module.generator.parameters(), 
+        #         self.args['grad_clip'])
         self.gen_optimizer.step()
         stepR /= batch_size
         avg_step = round(np.mean(sep_batch_index.tolist()), 4) 
@@ -468,10 +481,13 @@ class GPT2RLAgent(BaseAgent):
         correct = correct.float().sum()
         accuracy = correct / num_targets
         loss = loss / num_targets
-        loss.backward()
-        clip_grad_norm_(
-                self.model.module.generator.parameters(), 
-                self.args['grad_clip'])
+        with amp.scale_loss(loss, self.gen_mle_optimizer) as scaled_loss:
+            scaled_loss.backward()
+        clip_grad_norm_(amp.master_params(self.gen_mle_optimizer), self.args['grad_clip'])
+        # loss.backward()
+        # clip_grad_norm_(
+        #        self.model.module.generator.parameters(), 
+        #         self.args['grad_clip'])
         self.gen_mle_optimizer.step()
         return loss.item(), accuracy.item() 
 
@@ -508,7 +524,7 @@ class GPT2RLAgent(BaseAgent):
         # return: [2*batch, seq] (cid/rid) | [2*batch] (label)
         return cid, rid, label
 
-    def train_model(self, train_iter, mode='train', recoder=None):
+    def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
         '''
         Core logic of the GPT2RL Model
         1. train discriminator with binary classification
@@ -517,10 +533,12 @@ class GPT2RLAgent(BaseAgent):
         '''
         dataparallel_error, dataparallel_error_samples = 0, 0
         oom_time, oom_time_samples = 0, 0
+        dis_acc, dis_loss = [], []
+        rl_loss_, rl_reward_, rl_step_ = [], [], []
         # ========== D step ========== #
         for didx in range(self.args['dis_step']):
             with tqdm(total=len(train_iter)) as pbar:
-                for batch in train_iter:
+                for idx, batch in enumerate(train_iter):
                     try:
                         cid, rid, _ = batch    # [batch, seq]
                         max_size = min(rid.shape[-1], self.args['tgt_len_size'])
@@ -528,9 +546,13 @@ class GPT2RLAgent(BaseAgent):
                         cid, rid, label = self.prepare_discriminator_data(cid, rid, max_size)
                         loss, acc = self.train_discriminator(cid, rid, label)
                         log_str = f'[!] {didx+1}/{self.args["dis_step"]}; dis-loss: {loss}; dis-acc: {acc}'
+                        dis_acc.append(acc)
+                        dis_loss.append(loss)
+                        recoder.add_scalar(f'train-epoch-{idx_}/DisRunLoss', loss, idx)
+                        recoder.add_scalar(f'train-epoch-{idx_}/DisRunAcc', acc, idx)
                         pbar.set_description(log_str)
                         pbar.update(batch_size)
-                        print(log_str, file=open(recoder, 'a'))
+                        # print(log_str, file=open(recoder, 'a'))
                     except RuntimeError as exception:
                         if 'out of memory' in str(exception):
                             oom_time += 1
@@ -541,10 +563,12 @@ class GPT2RLAgent(BaseAgent):
                             raise exception
                     except TypeError as exception:
                         # the Error made by the DataParallel
-                        ipdb.set_tracce()
+                        ipdb.set_trace()
                         dataparallel_error += 1
                         dataparallel_error_samples += batch_size
                         pbar.set_description(f'[!] occur DataParallel Error: {dataparallel_error}|{dataparallel_error_samples}')
+                recoder.add_scalar(f'train-whole/DisAcc', np.mean(dis_acc), idx_)
+                recoder.add_scalar(f'train-whole/DisLoss', np.mean(dis_loss), idx_)
         # ========== G step ========== #
         for gidx in range(self.args['gen_step']):
             with tqdm(total=len(train_iter)) as pbar:
@@ -560,15 +584,22 @@ class GPT2RLAgent(BaseAgent):
                         rl_loss, avg_step, stepR = self.train_generator_rl(
                                 cid, None, max_size)
                         rl_loss, stepR = round(rl_loss, 4), round(stepR, 4)
+                        rl_loss_.append(rl_loss)
+                        rl_reward_.append(stepR)
+                        rl_step_.append(avg_step)
+                        
                         # NOTE:
                         # MLE Training
                         # mle_loss, mle_acc = self.train_generator_mle(cid, rid)
                         # mle_loss, mle_acc = round(mle_loss, 4), round(mle_acc, 4)
                         # log_str = f'[!] {gidx+1}/{self.args["gen_step"]}; loss(rl/mle): {rl_loss}/{mle_loss}; rl_inf(step/reward): {avg_step}({rid_length})/{stepR}; mle_acc: {mle_acc}'
                         log_str = f'[!] {gidx+1}/{self.args["gen_step"]}; loss(rl): {rl_loss}; rl_inf(step/reward): {avg_step}({rid_length})/{stepR};'
+                        recoder.add_scalar(f'train-epoch-{idx_}/RLRunLoss', rl_loss, idx)
+                        recoder.add_scalar(f'train-epoch-{idx_}/Reward', stepR, idx)
+                        recoder.add_scalar(f'train-epoch-{idx_}/Step', avg_step, idx)
                         pbar.set_description(log_str)
                         pbar.update(batch_size)
-                        print(log_str, file=open(recoder, 'a'))
+                        # rint(log_str, file=open(recoder, 'a'))
                         # debug mode
                         if self.args['debug']:
                             self.model.module.save_memory(self.args['memory_ckpt_path'])
@@ -585,6 +616,9 @@ class GPT2RLAgent(BaseAgent):
                         dataparallel_error += 1
                         dataparallel_error_samples += batch_size
                         pbar.set_description(f'[!] occur DataParallel Error: {dataparallel_error}|{dataparallel_error_samples}')
+                recoder.add_scalar(f'train-whole/RLLoss', np.mean(rl_loss_), idx_)
+                recoder.add_scalar(f'train-whole/RLReward', np.mean(rl_reward_), idx_)
+                recoder.add_scalar(f'train-whole/RLStep', np.mean(rl_step_), idx_)
                         
         print(f'[!] DataParallel Error: {dataparallel_error}|{dataparallel_error_samples}')
         print(f'[!] OOM Error: {oom_time}|{oom_time_samples}')

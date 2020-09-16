@@ -9,7 +9,7 @@ class BaseAgent:
     def __init__(self):
         self.history = []
         # trigger utterances
-        self.trigger_utterances = load_topic_utterances('data/topic/train.txt')
+        # self.trigger_utterances = load_topic_utterances('data/topic/train.txt')
 
     def show_parameters(self, args):
         print('========== Model ==========')

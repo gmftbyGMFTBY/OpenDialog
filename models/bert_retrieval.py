@@ -4,20 +4,20 @@ class BERTRetrieval(nn.Module):
 
     def __init__(self, model='bert-base-chinese'):
         super(BERTRetrieval, self).__init__()
-        self.model = BertForSequenceClassification.from_pretrained(
-                model,
-                num_labels=1)
+        self.model = BertForSequenceClassification.from_pretrained(model,num_labels=2)
 
-    def forward(self, inpt):
+    def forward(self, inpt, token_type_ids):
         '''
         inpt: [batch, seq]
         '''
         attn_mask = generate_attention_mask(inpt)
         output = self.model(
-                input_ids=inpt,
-                attention_mask=attn_mask)
+            input_ids=inpt,
+            attention_mask=attn_mask,
+            token_type_ids=token_type_ids,
+        )
         logits = output[0].squeeze(1)    # [batch, 1] -> [batch]
-        return logits 
+        return logits
     
 class BERTRetrievalDISAgent(RetrievalBaseAgent):
     
@@ -274,7 +274,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
     Support Multi GPU, for example '1,2'
     '''
 
-    def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True):
+    def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True, local_rank=0):
         super(BERTRetrievalAgent, self).__init__(kb=kb)
         # hyperparameters
         try:
@@ -288,37 +288,28 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
                 'multi_gpu': self.gpu_ids,
                 'talk_samples': 256,
                 'vocab_file': 'bert-base-chinese',
-                'pad': 0,
+                'pad': 0,    # bert-base-chinese
                 'model': 'bert-base-chinese',
                 'amp_level': 'O2',
+                'local_rank': local_rank,
         }
         # hyperparameters
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         self.model = BERTRetrieval(self.args['model'])
-        
-        # before DDP
-        # self.model = convert_syncbn_model(self.model)
-        
         if torch.cuda.is_available():
             self.model.cuda()
         self.optimizer = transformers.AdamW(
             self.model.parameters(), 
-            lr=self.args['lr']
+            lr=self.args['lr'],
         )
         self.model, self.optimizer = amp.initialize(
             self.model, 
             self.optimizer, 
             opt_level=self.args['amp_level']
         )
-        
-        # before the Apex DDP, we need to use the convert_syncbn_model for BatchNorm
-        # self.model = DDP(self.model)
-        
         # self.model = DataParallel(self.model, device_ids=self.gpu_ids)
-        # bert model is too big, try to use the DataParallel
-        # self.criterion = nn.CrossEntropyLoss()
-        self.criterion = nn.MSELoss()
-        self.criterion_ = nn.MSELoss(reduction='none')
+        self.model = DataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
+        self.criterion = nn.CrossEntropyLoss()
         self.show_parameters(self.args)
 
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
@@ -328,13 +319,14 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         correct, s = 0, 0
         for idx, batch in enumerate(pbar):
             # label: [batch]
-            cid, label = batch
-            label = label.float()
+            cid, token_type_ids, label = batch
+            # label = label.float()
             self.optimizer.zero_grad()
-            output = self.model(cid)    # [batch]
+            output = self.model(cid, token_type_ids)    # [batch]
             loss = self.criterion(
-                    output, 
-                    label.view(-1))
+                output, 
+                label.view(-1),
+            )
             
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                 scaled_loss.backward()
@@ -346,20 +338,20 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             total_loss += loss.item()
             batch_num += 1
             
-            now_correct = torch.sum((output > 0.5) == label).item()
-            # now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
-            # now_correct = torch.sum(now_correct == label).item()
+            # now_correct = torch.sum((output > 0.5) == label).item()
+            now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
+            now_correct = torch.sum(now_correct == label).item()
             correct += now_correct
             s += len(label)
             
-            recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
-            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
-            recoder.add_scalar(f'train-epoch-{idx_}/Acc', correct/s, idx)
-            recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', now_correct/len(label), idx)
+            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Loss', total_loss/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunLoss', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Acc', correct/s, idx)
+            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunAcc', now_correct/len(label), idx)
 
             pbar.set_description(f'[!] train loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
-        recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
-        recoder.add_scalar(f'train-whole/Acc', correct/s, idx_)
+        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Loss', total_loss/batch_num, idx_)
+        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Acc', correct/s, idx_)
         return round(total_loss / batch_num, 4)
     
     @torch.no_grad()

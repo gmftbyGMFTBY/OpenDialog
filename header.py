@@ -18,6 +18,7 @@ import jieba
 from jieba import analyse
 import random
 import json
+import ijson
 import time
 import hashlib
 import pymongo

@@ -68,15 +68,24 @@ def load_dataset(args):
         return load_bert_nli_dataset(args)
     elif args['model'] == 'bertlogic':
         return load_bert_logic_dataset(args)
+    elif args['model'] == 'uni':
+        return load_uni_dataset(args)
+    elif args['model'] == 'bert_na':
+        return load_bert_na_dataset(args)
+    elif args['model'] == 'transformer':
+        return load_seq2seq_trs_dataset(args)
     else:
         raise Exception(f'[!] got unknow model: {args["model"]}')
 
 def main(**args):
-    # remove these 4 lines into 'train'
-    backup_mode = args['mode']
-    args['mode'] = 'train'
-    train_iter = load_dataset(args)
-    args['mode'] = backup_mode
+    # speed up
+    # torch.cuda.set_device(args['local_rank'])
+    # torch.distributed.init_process_group(backend='nccl', init_method='env://')
+    
+    # backup_mode = args['mode']
+    # args['mode'] = 'train'
+    # train_iter = load_dataset(args)
+    # args['mode'] = backup_mode
 
     agent_map = {
         'DualLSTM': DualLSTMAgent, 
@@ -102,11 +111,16 @@ def main(**args):
         'lccc': LCCCFTAgent,
         'bertretrieval_dis': BERTRetrievalDISAgent,
         'lcccir': LCCCIRAgent,
+        'uni': UNIAgent,
+        'bert_na': BERTNAAgent,
+        'transformer': TransformerAgent,
     }
-    parameter_map, parameter_key = collect_parameter_4_model(args)
-    agent = agent_map[args['model']](*parameter_map, **parameter_key)
 
     if args['mode'] == 'train':
+        train_iter = load_dataset(args)
+        parameter_map, parameter_key = collect_parameter_4_model(args)
+        agent = agent_map[args['model']](*parameter_map, **parameter_key)
+        
         sum_writer = SummaryWriter(log_dir=f'rest/{args["dataset"]}/{args["model"]}')
         if args['curriculum']:
             # 1. collect the loss for resetting the order (bertretrieval model)
@@ -137,8 +151,9 @@ def main(**args):
                 agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
         sum_writer.close()
     else:
-        # load best model
         test_iter = load_dataset(args)
+        parameter_map, parameter_key = collect_parameter_4_model(args)
+        agent = agent_map[args['model']](*parameter_map, **parameter_key)
         agent.load_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
         rest_path = f'rest/{args["dataset"]}/{args["model"]}/rest.txt'
         test_loss = agent.test_model(test_iter, rest_path)

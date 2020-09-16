@@ -8,6 +8,7 @@ from .diversity import *
 from .mmi import *
 from .bert_multiview import *
 from .bertmc import *
+from .lccc_lm import *
 
 class MultiView(nn.Module):
     
@@ -30,10 +31,10 @@ class MultiView(nn.Module):
     def __init__(self, nli=False, coherence=False, length=False,
                  logic=False, topic=False, fluency=False, nidf_tf=False,
                  repetition_penalty=False, distinct=False, bertmcf=False,
-                 mmi=False, coherence_path=None, nli_path=None, 
+                 mmi=False, lccc=None, coherence_path=None, nli_path=None, 
                  logic_path=None, topic_path=None, mmi_path=None,
                  bertmcf_path=None, fluency_path=None, 
-                 bertmultiview=None, bertmultiview_path=None):
+                 bertmultiview=None, bertmultiview_path=None, lccc_path=None):
         super(MultiView, self).__init__()
         self.mode = {
                 'bertmultiview': bertmultiview,
@@ -48,6 +49,7 @@ class MultiView(nn.Module):
                 'mmi': mmi,
                 'repetition_penalty': repetition_penalty,
                 'bertmcf': bertmcf,
+                'lccc': lccc_path,
         }
         self.mode_weight = {
                 'bertmultiview': 1,
@@ -59,7 +61,9 @@ class MultiView(nn.Module):
                 'mmi': 0.5,
                 'distinct': 0.6,
                 'repetition_penalty': 0.2,
-                'bertmcf': 1}
+                'bertmcf': 1,
+                'lccc': 1,
+        }
         self.topic_map = {'电影': 'movie', '美食': 'food', '数码产品': 'electric', '音乐': 'music', '体育': 'sport'}
         # load sub-models
         self.model = {}
@@ -69,7 +73,8 @@ class MultiView(nn.Module):
                 (fluency and not fluency_path) or \
                 (logic and not logic_path) or \
                 (bertmultiview and not bertmultiview_path) or \
-                (bertmcf and not bertmcf_path):
+                (bertmcf and not bertmcf_path) or \
+                (lccc and not lccc_path):
             raise Exception(f'[!] essential path is not found')
         for k, v in self.mode.items():
             if not v:
@@ -107,6 +112,8 @@ class MultiView(nn.Module):
                 elif k == 'bertmcf':
                     self.model['bertmcf'] = BERTMCF()
                     self.model['bertmcf'].load_model(bertmcf_path)
+                elif k == 'lccc':
+                    self.model['lccc'] = LCCCLM(lccc_path, 0, 0.9)
         print(f'[!] init the multview module over, available models are shown as follows:')
         # show the available models
         for k, v in self.mode.items():
@@ -173,6 +180,8 @@ class MultiView(nn.Module):
             elif k in ['bertmcf']:
                 assert groundtruth is not None, 'bertmcf must use the groundtruth'
                 scores[k] = self.model[k].scores(context, groundtruth, response)
+            elif k in ['lccc']:
+                scores[k] = self.model[k].scores(context, response, temperature=0.7)
             else:
                 scores[k] = self.model[k].scores(context, response)    # [list]
         average_scores = []    # [batch]
@@ -226,6 +235,7 @@ if __name__ == "__main__":
                 length=False,
                 nidf_tf=False,
                 fluency=False,
+                lccc=False,
                 repetition_penalty=False,
                 mmi=False,
                 distinct=False,
@@ -234,23 +244,24 @@ if __name__ == "__main__":
                 bertmcf_path='ckpt/zh50w/bertmcf/best.pt',
                 bertmultiview_path='ckpt/zh50w/bertretrieval_multiview/best.pt',
                 mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
-                coherence_path='ckpt/zh50w/bertretrieval_multiview/best.pt',
+                coherence_path='ckpt/zh50w/bertretrieval/best.pt',
                 topic_path='ckpt/fasttext/model.bin',
                 fluency_path='ckpt/LM/gpt2lm/best.pt',
+                lccc_path='/data/lantian/data/LCCD_GPT',
     )
     
     # dataset = read_evaluation_data('rest/train_generative/gpt2/rest.txt')
     # collect_results('multiview/evaluation_rest.txt', model, dataset)
 
     responses = [
-            '哈哈哈',
+            '电影比较喜欢我这种类型的泰坦尼克号',
             '我比较喜欢泰坦尼克号这种电影类型的',
             '我还是挺喜欢恐怖电影的',
             '恐怖电影非常刺激',
             '我喜欢打乒乓球',
             '我打乒乓球',
-            '爱情喜欢我电影', 
-            '我喜欢爱情片', 
+            '我喜欢和朋友爬山', 
+            '我要去和朋友爬山', 
             '你喜欢什么电影', 
             '你最喜欢什么电影类型呢',
             '今天天气确实挺好的', 

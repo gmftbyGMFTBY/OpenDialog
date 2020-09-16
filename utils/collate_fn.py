@@ -241,21 +241,24 @@ def bert_ir_dis_train_collate_fn(batch):
 
 def bert_ir_train_collate_fn(batch):
     pad = 0
-    cxt, label = [], []
+    cxt, token_type_ids, label = [], [], []
     for i in batch:
         cxt.append(i[0])
-        label.append(i[1])
-    # NOTE:
+        token_type_ids.append(i[1])
+        label.append(i[2])
+    # shuffle
     random_idx = list(range(len(cxt)))
     random.shuffle(random_idx)
     cxt = pad_sequence(cxt, batch_first=True, padding_value=pad)    # [batch, seq]
+    token_type_ids = pad_sequence(token_type_ids, batch_first=True, padding_value=pad)
     cxt = cxt[random_idx]
-
+    token_type_ids = token_type_ids[random_idx]
     label = torch.tensor(label, dtype=torch.long)    # [batch]
     label = label[random_idx]
+    
     if torch.cuda.is_available():
-        cxt, label = cxt.cuda(), label.cuda()
-    return cxt, label
+        cxt, token_type_ids, label = cxt.cuda(), token_type_ids.cuda(), label.cuda()
+    return cxt, token_type_ids, label
 
 def bert_ir_test_collate_fn(batch):
     pad = 0

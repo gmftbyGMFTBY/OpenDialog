@@ -4,7 +4,7 @@ def collect_parameter_4_model(args):
     if args['model'] == 'DualLSTM':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'bertretrieval':
-        return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
+        return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
     elif args['model'] == 'lcccir':
         return (args['multi_gpu'],), {'run_mode': args['mode']}
     elif args['model'] == 'lccc':
@@ -47,6 +47,12 @@ def collect_parameter_4_model(args):
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'multigpt2':
         return (args['total_steps'],), {'run_mode': args['mode'], 'lang': args['lang']}
+    elif args['model'] == 'uni':
+        return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
+    elif args['model'] == 'bert_na':
+        return (args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang']}
+    elif args['model'] == 'transformer':
+        return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang']}
     else:
         raise Exception(f'[!] unknow model {args["model"]}')
 
@@ -84,10 +90,9 @@ def read_text_data_noparallel(path):
         return data
 
 def read_text_data(path):
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         data = f.read().split('\n\n')
         data = [i.split('\n') for i in data if i.strip()]
-        # NOTE:
         data = [i for i in data if len(i) >= 2]
         return data
 
@@ -125,6 +130,14 @@ def read_text_data_sep(path):
             context = [i.strip() for i in context.split('[SEP]')]
             nd.append(context + [response])
     return nd
+
+def read_lccc_data(path, debug=False):
+    with open(path) as f:
+        data = json.load(f)['train']
+        if debug:
+            data = data[:100000]
+    print(f'[!] load LCCC dataset over, find {len(data)} samples')
+    return data
 
 def read_json_data(path):
     '''
@@ -258,6 +271,29 @@ def save_topic(s):
     else:
         return False, s
 # ========== wechat api ==========
+
+def get_masks(src, trg, PAD=0):
+    """generate masks based on inputs and targets
+    
+    Arguments:
+        src {torch.LongTensor} -- input mini-batch in shape (L, B)
+        trg {torch.LongTensor} -- target mini-batch in shape (L, B)
+    
+    Keyword Arguments:
+        PAD {int} -- padding value (default: {0})
+    
+    Returns:
+        masks can be directly passed into encode/decode's forward method
+    """
+    S, S_B = src.shape
+    T, T_B = trg.shape
+    assert S_B == T_B, "Batch Size of source input and target input inconsistent! %d != %d"%(S_B, T_B)
+
+    trg_mask = nn.Transformer.generate_square_subsequent_mask(T, T)
+    src_key_padding_mask = (src == PAD).permute(1, 0)    # [B, S]
+    trg_key_padding_mask = (trg == PAD).permute(1, 0)    # [B, T]
+    memory_key_padding_mask = (src == PAD).permute(1, 0)    # [B, S]
+    return trg_mask, src_key_padding_mask, trg_key_padding_mask, memory_key_padding_mask
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

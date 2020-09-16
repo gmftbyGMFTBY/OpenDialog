@@ -19,10 +19,10 @@ class GPT2(nn.Module):
     def forward(self, inpt_ids):
         # inpt_ids: [batch, seq]
         # ipdb.set_trace()
-        attn_mask = generate_attention_mask(inpt_ids)
+        # attn_mask = generate_attention_mask(inpt_ids)
         outputs = self.model(
             input_ids=inpt_ids, 
-            attention_mask=attn_mask
+            # attention_mask=attn_mask
         )
         output = outputs[0]    # [batch, seq, vocab]
         return output
@@ -161,11 +161,6 @@ class GPT2Agent(BaseAgent):
                 config_path=self.args['config_path']
         )
         
-        # NOTE:
-        torch.cuda.set_device(local_rank)
-        # device = torch.device("cuda", local_rank)
-        torch.distributed.init_process_group(backend='nccl', init_method='env://')
-        
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.args['pad'], reduction='sum')
         if torch.cuda.is_available():
             self.model.cuda()
@@ -181,17 +176,17 @@ class GPT2Agent(BaseAgent):
 
         # need to obtain the whole iter
         self.warmup_scheduler = transformers.get_linear_schedule_with_warmup(
-                self.optimizer,
-                num_warmup_steps=self.args['warmup_steps'],
-                num_training_steps=self.args['total_steps'])
+            self.optimizer,
+            num_warmup_steps=self.args['warmup_steps'],
+            num_training_steps=self.args['total_steps']
+        )
         # train: DataParallel; test: no DataParallel
         if self.args['run_mode'] == 'train':
             # NOTE:
-            # self.model = DistributedDataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
-            self.model = DataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
-            # self.model = DataParallel(
-            #         self.model, 
-            #         device_ids=self.gpu_ids)
+            # self.model = DataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
+            self.model = DataParallel(
+                    self.model, 
+                    device_ids=self.gpu_ids)
             # self.model = BalancedDataParallel(
             #         self.args['balanceddata_parallel_gpu0_size'],
             #         self.model,
@@ -281,6 +276,8 @@ class GPT2Agent(BaseAgent):
                 torch.cuda.empty_cache()
             else:
                 raise exception
+        recoder.add_scalar(f'train-whole/TokenAcc', np.mean(total_acc), idx_)
+        recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
         return round(total_loss/batch_num, 4)
 
     def test_model_samples(self, test_iter, path, samples=5):

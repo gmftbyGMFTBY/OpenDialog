@@ -17,3 +17,6 @@ from .pone import *
 from .DualLSTM import *
 from .bert_mc import *
 from .lccc_gpt2 import *
+from .uni import *
+from .bert_na import *
+from .seq2seq_trs import *

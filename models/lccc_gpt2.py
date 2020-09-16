@@ -94,37 +94,6 @@ class LCCC(nn.Module):
                 break
         return current_output
     
-# ========= ========== #
-class LCCCRLAgent(BaseAgent):
-    
-    '''Reinforcement Learning Fine-tuning LCCC on the given open-domain dialog corpus'''
-    
-    def __init__(self, multi_gpu, run_mode='test'):
-        super(LCCCRLAgent, self).__init__()
-        try:
-            self.gpu_ids = list(range(len(multi_gpu.split(','))))
-        except:
-            raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
-        self.args = {
-            'tgt_len_size': 50,
-            'grad_clip': 1.0,
-            'topk': 0,
-            'topp': 0.9,
-            'unk': -1,   # For LCCD GPT
-            'temperature': 0.7,
-            'pretrained_path': '/home/lt/data/LCCD_GPT',
-            'multi_gpu': self.gpu_ids,
-            'run_mode': run_mode,    # test / rerank
-            'samples': 16,
-            'lr': 1e-5,
-            'amp_level': 'O2',
-            'lang': 'zh',
-        }
-        self.model = LCCCRL()
-        
-    def train_model(self, train_iter):
-        pass
-    
 class LCCCFTAgent(BaseAgent):
     
     '''
@@ -171,26 +140,6 @@ class LCCCFTAgent(BaseAgent):
             self.optimizer, 
             opt_level=self.args['amp_level'],
         )
-        
-        # use the BERTRetrieval model as the reranker
-        if self.args['run_mode'] == 'rerank':
-            from multiview.multiview import MultiView
-            print(f'[!] MultiView reranker model will be initized')
-            self.reranker = MultiView(
-                topic=False,
-                length=False,
-                nidf_tf=False,
-                coherence=True,
-                fluency=False,
-                repetition_penalty=False,
-                mmi=False,
-                distinct=False,
-                mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
-                coherence_path='ckpt/zh50w/bertretrieval/best.pt',
-                topic_path='ckpt/fasttext/model.bin',
-                fluency_path='ckpt/LM/gpt2lm/best.pt',
-            )
-            print(f'[!] load multiview model over')
         self.show_parameters(self.args)
         
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):

@@ -87,3 +87,6 @@
     * 设计新颖的架构保证知识信息的注入（similar to ERNIE）
 - [ ] 检索式模型很难区分样本的质量，要么就是0.999要么就是0.001的分数，但是实际上，每个样本对于上下文存在一个符合的程度，如果不区分程度的话，两个样本如果都是0.999很难区分他们好的质量，从而容易选出错误的候选样本，为了解决这个问题，提出使用使用multiview的方式对正样本和负样本进行soft重打分的册率做回归，baseline是用naturalness方式negative aspect训练的二分类模型，multiview soft重打分也是用naturalness的方法作为负样本，并在automatic dialog evaluation和generation rerank方面测试。
 - [x] LCCC的GPT2模型训练retrieval dialog system效果不好
+- [x] 检索式对话系统，使用候选回复的上下文的信息 KDD 2020 的思路，很棒
+- [x] 快速bert检索式对话系统，通过使用bi-encoder的架构，拥有bert的效果也拥有极快的线上运算速度(效果保证使用了知识蒸馏)
+
