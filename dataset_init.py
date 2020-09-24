@@ -6,19 +6,25 @@ def load_seq2seq_trs_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     data = TransformerDataset(path, mode=args['mode'], lang=args['lang'])
     args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
-    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=data.collate)
-    return iter_
+    if args['mode'] == 'train':
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+        iter_ = DataLoader(data, sampler=train_sampler, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
+        return iter_
+    else:
+        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
+        return iter_
 
 def load_seq2seq_dataset(args):
-    path = f'data/{args["dataset"]}/{args["mode"]}.csv'
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    data = Seq2SeqDataset(path, mode=args['mode'], lang=args['lang'])
+    args['vocab'] = data.vocab
     if args['mode'] == 'train':
-        data = DialogDataset(path, mode=args['mode'], n_vocab=args['n_vocab'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'])
-        args['vocab_size'] = len(data.vocab)
-        args['vocab'] = data.vocab
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+        iter_ = DataLoader(data, sampler=train_sampler, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
+        return iter_
     else:
-        data = DialogDataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], vocab=args['vocab'])
-    iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=dialog_collate_fn)
-    return iter_
+        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
+        return iter_
 
 def load_gpt2rl_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'

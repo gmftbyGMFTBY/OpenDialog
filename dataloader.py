@@ -10,26 +10,24 @@ The Dataset Object can handle the single-turn and multi-turn (<eou> seperator) d
 SPECIAL_TOKENS = ["[CLS]", "[SEP]", "[speaker1]", "[speaker2]"]
 # ========== For LCCC ========== #
 
-class vocabulary:
+class ChineseTokenizer:
     
     '''
-    Only for RNN based model
+    Only for Chinese RNN based model, parameters:
+    :corpus: a list of pair (context string, response string)
     '''
 
-    def __init__(self, corpus, n_vocab=50000, min_freq=1, lang='zh'):
-        if n_vocab == -1:
-            n_vocab = None
+    def __init__(self, corpus, n_vocab=50000, min_freq=1):
         self.allowPOS = ['n', 'nr', 'nz', 'PER', 'LOC', 'ORG', 'ns', 'nt', 'nw', 'vn', 's']
         self.topk = 10
-        # <res> is the first token for response
-        # <ctx> is the firat token for context
-        # <eou> is the spearator between two utterances
-        reversed_tokens = ['<pad>', '<unk>', '<sos>', '<eos>']
-        self.lang = lang
-        self.vocab = vocab.Vocab(self._build_keywords(corpus), max_size=n_vocab,
-                min_freq=min_freq, specials=reversed_tokens)
-        # make sure the <pad> token id is 0
-        assert self.vocab.stoi['<pad>'] == 0, f'<pad> id should be 0, but got {self.vocab.stoi["<pad>"]}'
+        special_tokens = ['[PAD]', '[UNK]', '[CLS]', '[SEP]']
+        self.vocab = vocab.Vocab(
+            self._build_vocab(corpus),
+            max_size=n_vocab,
+            min_freq=min_freq, 
+            specials=special_tokens,
+        )
+        assert self.vocab.stoi['[PAD]'] == 0, f'[PAD] id should be 0, but got {self.vocab.stoi["[PAD]"]}'
         print(f'[!] init the vocabulary over, vocab size: {len(self.vocab)}')
 
     def __len__(self):
@@ -39,27 +37,37 @@ class vocabulary:
     def size(self):
         return len(self.vocab)
 
-    def idx2str(self, idx_seq, spliter=''):
-        # chinese spliter: ''; english spliter: ' '
+    def decode(self, idx_seq, spliter=''):
+        '''chinese spliter: ''; english spliter: ' '
+        '''
         words = self.idx2toks(idx_seq)
         return spliter.join(words)
 
-    def toks2idx(self, tok_seq, len_size_limit):
-        first_token = self.vocab.stoi['<sos>']
-        sentence = list(map(lambda i: self.vocab.stoi[i] if i in self.vocab.stoi else self.vocab.stoi['<unk>'], tok_seq))[-(len_size_limit-2):]
-        idxs = [first_token] + sentence + [self.vocab.stoi['<eos>']]
+    def encode(self, tok_seq, len_size_limit):
+        '''Careful about the special tokens'''
+        sentences = re.split('(\[SEP\])', tok_seq)
+        sep_token = self.vocab.stoi['[SEP]']
+        cls_token = self.vocab.stoi['[CLS]']
+        idxs = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            sentence = list(jieba.cut(sentence))
+            sentence = list(map(lambda i: self.vocab.stoi[i] if i in self.vocab.stoi else self.vocab.stoi['[UNK]'], sentence))
+            idxs.extend(sentence)
+            idxs.append(sep_token)
+        idxs = idxs[-(len_size_limit-2):]
+        idxs = [cls_token] + sentence + [sep_token]
         return idxs
 
     def idx2toks(self, idx_seq):
-        toks = ['<sos>'] + list(map(lambda i: self.vocab.itos[i], idx_seq)) + ['<eos>']
-        return toks
+        return list(map(lambda i: self.vocab.itos[i], idx_seq))
 
     def _build_vocab(self, corpus):
         vocab_counter = Counter()
-        for words in corpus[0]:
-            vocab_counter.update(words)
-        for words in corpus[1]:
-            vocab_counter.update(words)
+        for context, response in tqdm(corpus):
+            c_words = list(jieba.cut(context))
+            r_words = list(jieba.cut(response))
+            vocab_counter.update(c_words + r_words)
         print(f'[!] whole vocab size: {len(vocab_counter)}')
         return vocab_counter
 
@@ -68,9 +76,10 @@ class vocabulary:
         for dialog in tqdm(corpus):
             for utterance in dialog:
                 words = jieba.analyse.extract_tags(
-                        utterance, 
-                        topK=self.topk, 
-                        allowPOS=self.allowPOS)
+                    utterance, 
+                    topK=self.topk, 
+                    allowPOS=self.allowPOS
+                )
                 keywords.update(words)
         print(f'[!] collect {len(keywords)} keywords')
         return keywords
@@ -1718,7 +1727,11 @@ class PONEDataset(Dataset):
         
 class TransformerDataset(Dataset):
     
-    def __init__(self, path, mode='train', lang='zh'):
+    '''
+    Seq2Seq-attn or Transformer DataLoader
+    '''
+    
+    def __init__(self, path, mode='train', lang='zh', max_length=256, trs=True):
         self.mode = mode
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
         self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
@@ -1731,15 +1744,13 @@ class TransformerDataset(Dataset):
         
         with open(path, 'r', encoding='utf-8') as f:
             dataset = read_text_data(path)
-            sample_size = 500000 if self.mode == 'train' else 10000
-            dataset = random.sample(dataset, sample_size)
             responses = [i[-1] for i in dataset]
             contexts = [' [SEP] '.join(i[:-1]) for i in dataset]
             self.data = []
             for context, response in tqdm(list(zip(contexts, responses))):
-                rid = self.vocab.encode(response)
+                rid = self.vocab.encode(response)[-max_length:]
                 rid_pos = np.arange(1, 1 + len(rid))
-                cid = self.vocab.encode(context)
+                cid = self.vocab.encode(context)[-max_length:]
                 cid_pos = np.arange(1, 1 + len(cid))
                 bundle = {
                     'cid': cid,
@@ -1785,6 +1796,63 @@ class TransformerDataset(Dataset):
             trg_key_padding_mask = trg_key_padding_mask.cuda()
             memory_key_padding_mask = memory_key_padding_mask.cuda()
         return src, trg, src_pos, trg_pos, trg_mask, src_key_padding_mask, trg_key_padding_mask, memory_key_padding_mask
+        
+class Seq2SeqDataset(Dataset):
+    
+    '''
+    Seq2Seq-attn or Transformer DataLoader
+    '''
+    
+    def __init__(self, path, mode='train', lang='zh', max_length=256, n_vocab=50000):
+        self.mode = mode
+        self.pp_path = f'{os.path.splitext(path)[0]}_s2s.pt'
+        
+        with open(path, 'r', encoding='utf-8') as f:
+            dataset = read_text_data(path)
+            if os.path.exists(self.pp_path):
+                self.vocab = torch.load(self.pp_path)
+                print(f'[!] load preprocessed vocab file from {self.pp_path}')
+            else:
+                self.vocab = ChineseTokenizer(dataset, n_vocab=n_vocab)
+            print('[!] init the vocabulary over')
+            responses = [i[-1] for i in dataset]
+            contexts = ['[SEP]'.join(i[:-1]) for i in dataset]
+            self.data = []
+            for context, response in tqdm(list(zip(contexts, responses))):
+                rid = self.vocab.encode(response.strip(), max_length)
+                cid = self.vocab.encode(context.strip(), max_length)
+                bundle = {
+                    'cid': cid,
+                    'rid': rid,
+                }
+                self.data.append(bundle)
+            print(f'[!] collect {len(self.data)} samples for training')
+        self.pad_id = self.vocab.vocab.stoi['[PAD]']
+        if not os.path.exists(self.pp_path):
+            torch.save(self.vocab, self.pp_path)
+            print(f'[!] save the vocab into {self.pp_path}')
+            
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, i):
+        return self.data[i]
+    
+    def collate(self, batch):
+        src = pad_sequence(
+            [torch.tensor(instance['cid'], dtype=torch.long) for instance in batch],
+            batch_first=False, padding_value=self.pad_id,
+        )
+        src_l = torch.LongTensor([len(instance['cid']) for instance in batch])
+        trg = pad_sequence(
+            [torch.tensor(instance['rid'], dtype=torch.long) for instance in batch],
+            batch_first=False, padding_value=self.pad_id,
+        )
+        trg_l = torch.LongTensor([len(instance['rid']) for instance in batch])
+        if torch.cuda.is_available():
+            src, trg = src.cuda(), trg.cuda()
+            src_l, trg_l = src_l.cuda(), trg_l.cuda()
+        return src, src_l, trg, trg_l
         
 class BERTNADataset(Dataset):
     
@@ -1898,8 +1966,11 @@ if __name__ == "__main__":
     # train_data = BERTNLIDataset('data/NLI/cnsd_snli_v1.0.train.jsonl', mode='train')
     # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=nli_collate_fn)
     # ========== LCCC ========== #
-    train_data = UNIDataset('/data/lantian/data/LCCD_GPT', 'data/LCCC/LCCC-base.json')
-    train_iter = DataLoader(train_data, collate_fn=train_data.collate, batch_size=10)
+    # train_data = UNIDataset('/data/lantian/data/LCCD_GPT', 'data/LCCC/LCCC-base.json')
+    # train_iter = DataLoader(train_data, collate_fn=train_data.collate, batch_size=10)
+    # ========== Seq2Seq ========== #
+    train_data = Seq2SeqDataset('data/zh50w/train.txt', mode='train')
+    train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
     # ========= ITERATE ========= # 
     for batch in tqdm(train_iter):
         ipdb.set_trace()

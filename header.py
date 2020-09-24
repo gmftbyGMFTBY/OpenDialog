@@ -12,6 +12,8 @@ from torchtext import vocab
 from collections import Counter
 from tqdm import tqdm
 import os
+import re
+import math
 from itertools import chain
 import csv
 import jieba

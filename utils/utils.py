@@ -26,7 +26,7 @@ def collect_parameter_4_model(args):
     elif args['model'] == 'bertlogic':
         return (args['multi_gpu'],), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'seq2seq':
-        return (args['vocab_size'], args['vocab']), {'run_mode': args['mode'], 'lang': args['lang']}
+        return (args['multi_gpu'], args['vocab']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
     elif args['model'] == 'gpt2':
         return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
     elif args['model'] == 'pfgpt2':
@@ -52,7 +52,7 @@ def collect_parameter_4_model(args):
     elif args['model'] == 'bert_na':
         return (args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'transformer':
-        return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang']}
+        return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
     else:
         raise Exception(f'[!] unknow model {args["model"]}')
 

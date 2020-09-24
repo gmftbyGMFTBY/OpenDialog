@@ -158,7 +158,7 @@ class GPT2Agent(BaseAgent):
                 self.args['topk'], 
                 self.args['topp'], 
                 self.args['repetition_penalty'],
-                config_path=self.args['config_path']
+                config_path=self.args['config_path'],
         )
         
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.args['pad'], reduction='sum')
@@ -171,7 +171,7 @@ class GPT2Agent(BaseAgent):
         self.model, self.optimizer = amp.initialize(
             self.model, 
             self.optimizer, 
-            opt_level=self.args['amp_level']
+            opt_level=self.args['amp_level'],
         )
 
         # need to obtain the whole iter

@@ -78,15 +78,6 @@ def load_dataset(args):
         raise Exception(f'[!] got unknow model: {args["model"]}')
 
 def main(**args):
-    # speed up
-    # torch.cuda.set_device(args['local_rank'])
-    # torch.distributed.init_process_group(backend='nccl', init_method='env://')
-    
-    # backup_mode = args['mode']
-    # args['mode'] = 'train'
-    # train_iter = load_dataset(args)
-    # args['mode'] = backup_mode
-
     agent_map = {
         'DualLSTM': DualLSTMAgent, 
         'seq2seq': Seq2SeqAgent,
@@ -117,6 +108,8 @@ def main(**args):
     }
 
     if args['mode'] == 'train':
+        torch.cuda.set_device(args['local_rank'])
+        torch.distributed.init_process_group(backend='nccl', init_method='env://')
         train_iter = load_dataset(args)
         parameter_map, parameter_key = collect_parameter_4_model(args)
         agent = agent_map[args['model']](*parameter_map, **parameter_key)
@@ -148,7 +141,9 @@ def main(**args):
                     recoder=sum_writer,
                     idx_=i,
                 )
-                agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
+                # only one process save the checkpoint
+                if args['local_rank'] == 0:
+                    agent.save_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
         sum_writer.close()
     else:
         test_iter = load_dataset(args)
