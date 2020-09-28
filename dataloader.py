@@ -51,12 +51,14 @@ class ChineseTokenizer:
         idxs = []
         for sentence in sentences:
             sentence = sentence.strip()
+            if sentence == '[SEP]':
+                continue
             sentence = list(jieba.cut(sentence))
             sentence = list(map(lambda i: self.vocab.stoi[i] if i in self.vocab.stoi else self.vocab.stoi['[UNK]'], sentence))
             idxs.extend(sentence)
             idxs.append(sep_token)
         idxs = idxs[-(len_size_limit-2):]
-        idxs = [cls_token] + sentence + [sep_token]
+        idxs = [cls_token] + idxs
         return idxs
 
     def idx2toks(self, idx_seq):
@@ -1731,9 +1733,12 @@ class TransformerDataset(Dataset):
     Seq2Seq-attn or Transformer DataLoader
     '''
     
-    def __init__(self, path, mode='train', lang='zh', max_length=256, trs=True):
+    def __init__(self, path, mode='train', lang='zh', max_length=256):
         self.mode = mode
-        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        if lang == 'zh':
+            self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        else:
+            self.vocab = BertTokenizer.from_pretrained('bert-base-uncased')
         self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
         
         self.pp_path = f'{os.path.splitext(path)[0]}_trs.pt'
@@ -1759,6 +1764,7 @@ class TransformerDataset(Dataset):
                     'rid_pos': rid_pos,
                 }
                 self.data.append(bundle)
+            self.data = sorted(self.data, key=lambda x: len(x['cid']))
             print(f'[!] collect {len(self.data)} samples for training')
             torch.save(self.data, self.pp_path)
             print(f'[!] process the dataset and write it into {self.pp_path}')
@@ -1805,16 +1811,21 @@ class Seq2SeqDataset(Dataset):
     
     def __init__(self, path, mode='train', lang='zh', max_length=256, n_vocab=50000):
         self.mode = mode
-        self.pp_path = f'{os.path.splitext(path)[0]}_s2s.pt'
+        self.pp_path = f'{os.path.split(path)[0]}/train_s2s.pt'
+        if os.path.exists(self.pp_path):
+            self.vocab, self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed vocab file from {self.pp_path}')
+            self.pad_id = self.vocab.vocab.stoi['[PAD]']
+            if self.mode == 'train':
+                return None
         
         with open(path, 'r', encoding='utf-8') as f:
             dataset = read_text_data(path)
-            if os.path.exists(self.pp_path):
-                self.vocab = torch.load(self.pp_path)
-                print(f'[!] load preprocessed vocab file from {self.pp_path}')
-            else:
+            dataset = random.sample(dataset, 500000)
+            if self.mode == 'train':
                 self.vocab = ChineseTokenizer(dataset, n_vocab=n_vocab)
-            print('[!] init the vocabulary over')
+                self.pad_id = self.vocab.vocab.stoi['[PAD]']
+                print('[!] init the vocabulary over')
             responses = [i[-1] for i in dataset]
             contexts = ['[SEP]'.join(i[:-1]) for i in dataset]
             self.data = []
@@ -1827,10 +1838,9 @@ class Seq2SeqDataset(Dataset):
                 }
                 self.data.append(bundle)
             print(f'[!] collect {len(self.data)} samples for training')
-        self.pad_id = self.vocab.vocab.stoi['[PAD]']
-        if not os.path.exists(self.pp_path):
-            torch.save(self.vocab, self.pp_path)
-            print(f'[!] save the vocab into {self.pp_path}')
+        if mode == 'train':
+            torch.save([self.vocab, self.data], self.pp_path)
+            print(f'[!] save the vocab and processed data into {self.pp_path}')
             
     def __len__(self):
         return len(self.data)

@@ -59,11 +59,11 @@ elif [ $mode = 'train' ]; then
         --dataset $dataset \
         --model $model \
         --mode train \
-        --batch_size 32 \
+        --batch_size 24 \
         --n_vocab 70000 \
         --epoch 30 \
-        --seed 30 \
-        --src_len_size 512 \
+        --seed 50 \
+        --src_len_size 300 \
         --tgt_len_size 20 \
         --multi_gpu $cuda \
         --lang $lang

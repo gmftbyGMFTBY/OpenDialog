@@ -288,6 +288,56 @@ class ESChat:
         # print(rest)
         # rest = rest[0]
         return rest
+    
+class CEWithLabelSmoothing(nn.Module):
+    
+    def __init__(self, vocab_size, label_smoothing=.1, ignore_index=-1, reduction="word_mean"):
+        """Cross Entropy Loss with Label Smoothing
+        
+        Arguments:
+            vocab_size {int} -- # of vocabulary in the target language
+        
+        Keyword Arguments:
+            label_smoothing {float} -- label smoothing factor (default: {.1})
+            ignore_index {int} -- index need to ignore when calculate the loss (default: {-1})
+            reduction {str} -- value in {"word_mean", "sum"}, "word mean": compute word level average loss, "sum":total loss (default: {"word_mean"}) 
+        """
+        super(CEWithLabelSmoothing, self).__init__()
+        self.criterion = nn.KLDivLoss(reduction="sum")
+        self.ignore_index = ignore_index
+        self.confidence = 1.0 - label_smoothing
+        self.label_smoothing = label_smoothing
+        self.log_softmax = nn.LogSoftmax(dim=1)
+        self.vocab_size = vocab_size
+        self._true_dist = None
+        self._reduction = reduction
+
+    def forward(self, logits, target):
+        assert logits.size(1) == self.vocab_size, "size mismatch! %d!=%d"%(logits.size(1),self.vocab_size)
+
+        true_dist = logits.clone()
+        true_dist.fill_(self.label_smoothing / (self.vocab_size - 2))
+        true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
+        true_dist[:, self.ignore_index] = 0.
+
+        mask = (target !=self.ignore_index).float().unsqueeze(1)
+        true_dist = true_dist*mask
+
+        loss = self.criterion(self.log_softmax(logits), true_dist)
+        
+        n_words = torch.sum(mask)
+        
+        # save some data for debugging
+        self._true_dist = true_dist
+        self._kl = loss
+        self._n_words = n_words
+
+        if self._reduction == "word_mean":
+            return loss / n_words
+        elif self._reduction == "sum":
+            return loss
+        else:
+            raise ValueError
 
 class IRHead(nn.Module):
     
@@ -405,10 +455,7 @@ class PositionEmbedding(nn.Module):
 
     def __init__(self, d_model, dropout=0.5, max_len=100):
         super(PositionEmbedding, self).__init__()
-        if dropout < 1:
-            self.dropout = nn.Dropout(p=dropout)
-        else:
-            self.dropout = None
+        self.dropout = nn.Dropout(p=dropout)
         pe = torch.zeros(max_len, d_model)    # [max_len, d_model]
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)    # [1, max_len]
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
@@ -419,10 +466,7 @@ class PositionEmbedding(nn.Module):
 
     def forward(self, x):
         x = x + self.pe[:x.size(0), :]
-        if self.dropout:
-            return self.dropout(x)
-        else:
-            return x
+        return self.dropout(x)
 
 def to_cuda(x, model=False):
     if torch.cuda.is_available():

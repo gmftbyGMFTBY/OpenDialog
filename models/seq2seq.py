@@ -124,7 +124,7 @@ class Seq2Seq(nn.Module):
 
     def __init__(self, vocab_size, embed_size, hidden_size, 
                  dropout=0.5, bidirectional=True, n_layers=1, 
-                 cls=0, sep=0):
+                 cls=0, sep=0, unk=0):
         super(Seq2Seq, self).__init__()
         self.encoder = GRUEncoder(
                 embed_size,
@@ -143,6 +143,7 @@ class Seq2Seq(nn.Module):
         self.n_layer = n_layers
         self.cls = cls
         self.sep = sep
+        self.unk = unk
 
     def forward(self, src, tgt, src_l):
         '''src/tgt [seq, batch]; src_l: [batch]'''
@@ -166,7 +167,7 @@ class Seq2Seq(nn.Module):
     @torch.no_grad()
     def predict(self, src, src_l, max_len):
         batch_size = src.shape[1]
-        final_opt = torch.zeros(max_len, batch_size).cuda()
+        final_opt = torch.zeros(max_len, batch_size, dtype=torch.long).cuda()
         src = self.embedding(src)    # [seq, batch, embed]
         context, hidden = self.encoder(src, src_l)
         hidden = hidden.repeat(self.n_layer, 1, 1)
@@ -179,6 +180,8 @@ class Seq2Seq(nn.Module):
         for t in range(1, max_len):
             inpt = self.embedding(inpt)    # [batch, embed]
             inpt, hidden = self.decoder(inpt, hidden, context)
+            # ignore the [UNK] token
+            inpt[:, self.unk] = -np.inf
             next_token = torch.multinomial(
                 F.softmax(inpt, dim=-1),
                 num_samples=1,
@@ -211,7 +214,7 @@ class Seq2SeqAgent(BaseAgent):
             'bidirectional': True,
             'n_layers': 2,
             'grad_clip': 3.0,
-            'lr': 1e-4,
+            'lr': 1e-3,
             'tgt_len_size': 50,
             'run_mode':run_mode,
             'lang': 'zh',
@@ -223,6 +226,7 @@ class Seq2SeqAgent(BaseAgent):
         self.args['pad'] = self.vocab.vocab.stoi['[PAD]']
         self.args['sep'] = self.vocab.vocab.stoi['[SEP]']
         self.args['cls'] = self.vocab.vocab.stoi['[CLS]']
+        self.args['unk'] = self.vocab.vocab.stoi['[UNK]']
         
         self.model = Seq2Seq(
             self.args['vocab_size'],
@@ -233,6 +237,7 @@ class Seq2SeqAgent(BaseAgent):
             n_layers=self.args['n_layers'],
             cls=self.args['cls'],
             sep=self.args['sep'],
+            unk=self.args['unk'],
         )
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.args['lr'])
         self.criteiron = nn.CrossEntropyLoss(ignore_index=self.args['pad'])
@@ -276,11 +281,19 @@ class Seq2SeqAgent(BaseAgent):
 
     @torch.no_grad()
     def test_model(self, test_iter, path):
+        def filter_(x):
+            x_ = ''.join(self.vocab.decode(x))
+            x_ = x_.replace('[PAD]', '')
+            return x_
+            
         def filter(x):
-            x = ''.join(self.vocab.decode(x))
-            if '[SEP]' in x:
-                x = x[:x.index('[SEP]')] + '[SEP]'
-            return x       
+            try:
+                x_ = ''.join(self.vocab.decode(x))
+                if '[SEP]' in x_:
+                    x_ = x_[:x_.index('[SEP]')] + '[SEP]'
+                return x_   
+            except:
+                ipdb.set_trace()
         self.model.eval()
         pbar = tqdm(test_iter)
         with open(path, 'w') as f:
@@ -292,7 +305,7 @@ class Seq2SeqAgent(BaseAgent):
                 
                 for i in range(batch_size):
                     ctx, ref, tgt = cid[:, i], rid[:, i], output[:, i]
-                    ctx_s, ref_s, tgt_s = filter(ctx), filter(ref), filter(tgt)
+                    ctx_s, ref_s, tgt_s = filter_(ctx), filter_(ref), filter(tgt)
 
                     f.write(f'CTX: {ctx_s}\n')
                     f.write(f'REF: {ref_s}\n')

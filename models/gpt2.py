@@ -120,26 +120,27 @@ class GPT2Agent(BaseAgent):
         vocab_file = 'data/vocab/vocab_small' if lang == 'zh' else 'data/vocab/vocab_english'
         lr = 1 if lm else 1.5e-4
         self.args = {
-                'lr': lr,
-                'grad_clip': 1.0,
-                'pad': 0,
-                'tgt_len_size': 30,
-                'lr_gamma': 0.5,
-                'patience': 5,
-                'min_lr': 1e-5,
-                'warmup_steps': 2000,
-                'total_steps': total_steps,
-                'topk': 200,
-                'topp': 0.95, 
-                'config_path': 'data/config/model_config_dialogue_big.json',
-                'multi_gpu': self.gpu_ids,
-                'run_mode': run_mode,
-                'vocab_file': vocab_file,
-                'lang': lang,
-                'topic_transfer': {'音乐': 'music', '体育': 'sport', '数码产品': 'electric', '美食': 'food', '电影': 'movie'},
-                'balanceddata_parallel_gpu0_size': 2,
-                'repetition_penalty': 1,
-                'amp_level': 'O2',
+            'lr': lr,
+            'grad_clip': 1.0,
+            'pad': 0,
+            'tgt_len_size': 30,
+            'lr_gamma': 0.5,
+            'patience': 5,
+            'min_lr': 1e-5,
+            'warmup_steps': 2000,
+            'total_steps': total_steps,
+            'topk': 2000,
+            'topp': 0.97, 
+            'config_path': 'data/config/model_config_dialogue_big.json',
+            'multi_gpu': self.gpu_ids,
+            'run_mode': run_mode,
+            'vocab_file': vocab_file,
+            'lang': lang,
+            'topic_transfer': {'音乐': 'music', '体育': 'sport', '数码产品': 'electric', '美食': 'food', '电影': 'movie'},
+            'balanceddata_parallel_gpu0_size': 2,
+            'repetition_penalty': 1,
+            'amp_level': 'O2',
+            'local_rank': local_rank,
         }
         # hyperparameters
         
@@ -152,27 +153,27 @@ class GPT2Agent(BaseAgent):
         self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
 
         self.model = GPT2(
-                self.vocab_size, 
-                self.unk, 
-                self.sep,
-                self.args['topk'], 
-                self.args['topp'], 
-                self.args['repetition_penalty'],
-                config_path=self.args['config_path'],
+            self.vocab_size, 
+            self.unk, 
+            self.sep,
+            self.args['topk'], 
+            self.args['topp'], 
+            self.args['repetition_penalty'],
+            config_path=self.args['config_path'],
         )
         
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.args['pad'], reduction='sum')
         if torch.cuda.is_available():
             self.model.cuda()
         self.optimizer = transformers.AdamW(
-                self.model.parameters(), 
-                lr=self.args['lr'], 
-                correct_bias=True)
-        self.model, self.optimizer = amp.initialize(
-            self.model, 
-            self.optimizer, 
-            opt_level=self.args['amp_level'],
-        )
+            self.model.parameters(), 
+            lr=self.args['lr'], 
+            correct_bias=True)
+        # self.model, self.optimizer = amp.initialize(
+        #     self.model, 
+        #     self.optimizer, 
+        #     opt_level=self.args['amp_level'],
+        # )
 
         # need to obtain the whole iter
         self.warmup_scheduler = transformers.get_linear_schedule_with_warmup(
@@ -183,10 +184,10 @@ class GPT2Agent(BaseAgent):
         # train: DataParallel; test: no DataParallel
         if self.args['run_mode'] == 'train':
             # NOTE:
-            # self.model = DataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
-            self.model = DataParallel(
-                    self.model, 
-                    device_ids=self.gpu_ids)
+            self.model = DataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
+            # self.model = DataParallel(
+            #         self.model, 
+            #         device_ids=self.gpu_ids)
             # self.model = BalancedDataParallel(
             #         self.args['balanceddata_parallel_gpu0_size'],
             #         self.model,
@@ -229,55 +230,45 @@ class GPT2Agent(BaseAgent):
         self.model.train()
         total_loss, total_acc, batch_num = 0, [], 0
         pbar = tqdm(train_iter)
-        oom_time = 0
-        try:
-            for idx, batch in enumerate(pbar):
-                cid = batch
-                
-                self.optimizer.zero_grad()
-    
-                logits = self.model(cid)    # [batch, seq, vocab]
-                shift_logits = logits[..., :-1, :].contiguous()
-                shift_labels = cid[..., 1:].contiguous()
-                loss = self.criterion(
-                        shift_logits.view(-1, shift_logits.size(-1)),
-                        shift_labels.view(-1))
-                _, preds = shift_logits.max(dim=-1)    # [batch, seq]
-                # ignore the pad
-                not_ignore = shift_labels.ne(self.args['pad'])   # pad is 0 or 1
-                num_targets = not_ignore.long().sum().item()    # the number of not pad tokens
-                correct = (shift_labels == preds) & not_ignore
-                correct = correct.float().sum()
-                # loss and token accuracy
-                accuracy = correct / num_targets
-                total_acc.append(accuracy.item())
-                loss = loss / num_targets
-                
-                # loss.backward()
-                # clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
-                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                    scaled_loss.backward()
-                clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
-            
-                self.optimizer.step()
-                self.warmup_scheduler.step()
-                total_loss += loss.item()
-                batch_num += 1
-                
-                recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
-                recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
-                recoder.add_scalar(f'train-epoch-{idx_}/RunTokenAcc', accuracy, idx)
-                recoder.add_scalar(f'train-epoch-{idx_}/TokenAcc', np.mean(total_acc), idx)
+        for idx, batch in enumerate(pbar):
+            cid = batch
+            self.optimizer.zero_grad()
 
-                pbar.set_description(f'[!] OOM: {oom_time}, train loss: {round(loss.item(), 4)}, token acc: {round(accuracy.item(), 4)}')
-        except RuntimeError as exception:
-            if 'out of memory' in str(exception):
-                oom_time += 1
-                torch.cuda.empty_cache()
-            else:
-                raise exception
-        recoder.add_scalar(f'train-whole/TokenAcc', np.mean(total_acc), idx_)
-        recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
+            logits = self.model(cid)    # [batch, seq, vocab]
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = cid[..., 1:].contiguous()
+            loss = self.criterion(
+                     shift_logits.view(-1, shift_logits.size(-1)),
+                    shift_labels.view(-1))
+            _, preds = shift_logits.max(dim=-1)    # [batch, seq]
+            # ignore the pad
+            not_ignore = shift_labels.ne(self.args['pad'])   # pad is 0 or 1
+            num_targets = not_ignore.long().sum().item()    # the number of not pad tokens
+            correct = (shift_labels == preds) & not_ignore
+            correct = correct.float().sum()
+            # loss and token accuracy
+            accuracy = correct / num_targets
+            total_acc.append(accuracy.item())
+            loss = loss / num_targets
+            
+            loss.backward()
+            clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+            # with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+            #     scaled_loss.backward()
+            # clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
+        
+            self.optimizer.step()
+            self.warmup_scheduler.step()
+            total_loss += loss.item()
+            batch_num += 1
+            
+            recoder.add_scalar(f'train-epoch-{idx_}-{self.args["local_rank"]}/Loss', total_loss/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}-{self.args["local_rank"]}/RunLoss', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}-{self.args["local_rank"]}/RunTokenAcc', accuracy, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}-{self.args["local_rank"]}/TokenAcc', np.mean(total_acc), idx)
+            pbar.set_description(f'[!] local_rank: {self.args["local_rank"]}; train loss: {round(loss.item(), 4)}, token acc: {round(accuracy.item(), 4)}')
+        recoder.add_scalar(f'train-whole-{self.args["local_rank"]}/TokenAcc', np.mean(total_acc), idx_)
+        recoder.add_scalar(f'train-whole-{self.args["local_rank"]}/Loss', total_loss/batch_num, idx_)
         return round(total_loss/batch_num, 4)
 
     def test_model_samples(self, test_iter, path, samples=5):

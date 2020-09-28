@@ -328,7 +328,7 @@ class GPT2RLAgent(BaseAgent):
     1. action space: action space (topk, topp) will decrease by the time
     '''
 
-    def __init__(self, multi_gpu, vocab_file='data/vocab/vocab_small', run_mode='train', lang='zh'):
+    def __init__(self, multi_gpu, vocab_file='data/vocab/vocab_small', run_mode='train', lang='zh', local_rank=0):
         super(GPT2RLAgent, self).__init__()
         # hyperparameters
         try:
@@ -364,6 +364,7 @@ class GPT2RLAgent(BaseAgent):
             'memory_ckpt_path': 'ckpt/train_generative_rl/gpt2gan/memory.pkl',
             'lang': lang,
             'amp_level': 'O2',
+            'local_rank': 0,
         }
         # hyperparameters
         
@@ -402,14 +403,14 @@ class GPT2RLAgent(BaseAgent):
         self.dis_optimizer = transformers.AdamW(
                 self.model.discriminator.parameters(),
                 lr=self.args['dis_lr'])
-        self.model, [self.gen_optimizer, self.gen_mle_optimizer, self.dis_optimizer] = amp.initialize(
-            self.model, 
-            [self.gen_optimizer, self.gen_mle_optimizer, self.dis_optimizer], 
-            opt_level=self.args['amp_level']
-        )
+        # self.model, [self.gen_optimizer, self.gen_mle_optimizer, self.dis_optimizer] = amp.initialize(
+        #     self.model, 
+        #     [self.gen_optimizer, self.gen_mle_optimizer, self.dis_optimizer], 
+        #     opt_level=self.args['amp_level']
+        # )
         # DataParallel
         if self.args['run_mode'] == 'train':
-            self.model = DataParallel(self.model, device_ids=self.gpu_ids)
+            self.model = DataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
         # criterion
         self.dis_criterion = nn.CrossEntropyLoss()
         self.mle_criterion = nn.CrossEntropyLoss(

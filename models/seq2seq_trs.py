@@ -20,7 +20,7 @@ class Transformer(nn.Module):
             max_len {int} -- max input length (default: {512})
             share_word_embedding {bool} -- share word embedding between encoder and decoder
         """
-        super().__init__()
+        super(Transformer, self).__init__()
         self.n_vocab = n_vocab
         self.enc_word_embed = nn.Embedding(n_vocab, d_model, padding_idx=pad)
         self.pos_embed  = nn.Embedding(max_len+1, d_model, padding_idx=pad)
@@ -60,17 +60,19 @@ class Transformer(nn.Module):
         src_embed = self.enc_word_embed(src) + self.pos_embed(src_pos)
         trg_embed = self.dec_word_embed(trg) + self.pos_embed(trg_pos)
 
-        memory = self.encoder(src_embed,
-                              mask=src_mask, 
-                              src_key_padding_mask=src_key_padding_mask,
-                             )
+        memory = self.encoder(
+            src_embed,
+            mask=src_mask, 
+            src_key_padding_mask=src_key_padding_mask,
+        )
 
-        output = self.decoder(trg_embed, memory,
-                              tgt_mask=trg_mask,
-                              memory_mask=memory_mask,
-                              tgt_key_padding_mask=trg_key_padding_mask,
-                              memory_key_padding_mask=memory_key_padding_mask,
-                             )
+        output = self.decoder(
+            trg_embed, memory,
+            tgt_mask=trg_mask,
+            memory_mask=memory_mask,
+            tgt_key_padding_mask=trg_key_padding_mask,
+            memory_key_padding_mask=memory_key_padding_mask,
+        )
 
         logits = self.proj(output)
         return logits
@@ -81,16 +83,16 @@ class Transformer(nn.Module):
                 memory_mask=None, src_key_padding_mask=None,
                 trg_key_padding_mask=None, memory_key_padding_mask=None, 
                 max_size=0, cls=0, sep=0, topk=0, topp=0.0):
-        '''return the trg_generated
-        shape of the returned tensor is [S, B]
+        '''return the trg_generated; shape of the returned tensor is [S, B]
         '''
         batch_size = src.size(1)
         stop_flag = [False] * batch_size
         src_embed = self.enc_word_embed(src) + self.pos_embed(src_pos)
-        # encode once
-        memory = self.encoder(src_embed,
-                              mask=src_mask,
-                              src_key_padding_mask=src_key_padding_mask)
+        memory = self.encoder(
+            src_embed,
+            mask=src_mask,
+            src_key_padding_mask=src_key_padding_mask
+        )
         # construct the trg tensor
         trg = torch.LongTensor([cls] * batch_size).unsqueeze(0)    # [1, B]
         trg_pos = torch.LongTensor([1] * batch_size).unsqueeze(0)    # [1, B]
@@ -102,11 +104,13 @@ class Transformer(nn.Module):
             trg_mask = nn.Transformer.generate_square_subsequent_mask(idx, idx)
             if torch.cuda.is_available():
                 trg_mask = trg_mask.cuda()
-            output = self.decoder(trg_embed, memory,
-                                  tgt_mask=trg_mask,
-                                  memory_mask=None,
-                                  tgt_key_padding_mask=None,
-                                  memory_key_padding_mask=memory_key_padding_mask)    # [1, B, E]
+            output = self.decoder(
+                trg_embed, memory,
+                tgt_mask=trg_mask,
+                memory_mask=None,
+                tgt_key_padding_mask=None,
+                memory_key_padding_mask=memory_key_padding_mask
+            )    # [1, B, E]
             logits = self.proj(output[-1, :, :])    # [B, V]
             # logits = top_k_top_p_filtering_batch(logits, top_k=topk, top_p=topp)    # [B, V]
             next_token = torch.multinomial(
@@ -138,27 +142,31 @@ class TransformerAgent(BaseAgent):
             self.gpu_ids = list(range(len(multi_gpu.split(','))))
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
-        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        if lang == 'zh':
+            self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        else:
+            self.vocab = BertTokenizer.from_pretrained('bert-base-uncased')
         self.args = {
-            'lr': 1.,
-            'grad_clip': 1,
+            'lr': 5e-4,
+            'grad_clip': 0.5,
             'tgt_len_size': 50,
-            'topk': 200,
-            'topp': 0.95,
+            'topk': 1000,
+            'topp': 0.97,
             'multi_gpu': self.gpu_ids,
             'run_mode': run_mode,
             'lang': lang,
-            'amp_level': 'O2',
+            'label_smooth': 0.1,
             # transformer parameters
             'd_model': 768,
-            'n_head': 8,
-            'n_enc_layers': 6,
-            'n_dec_layers': 6,
+            'n_head': 4,
+            'n_enc_layers': 3,
+            'n_dec_layers': 3,
             'd_ff': 1024,
             'share_embed': True,
             'dropout': 0.2,
-            'warmup_steps': 2000,
+            'warmup_steps': 4000,
             'total_steps': total_steps,
+            # transformer paramters
             'local_rank': local_rank,
         }
         self.vocab_size = len(self.vocab)
@@ -178,7 +186,8 @@ class TransformerAgent(BaseAgent):
             dropout=self.args['dropout'],
         )
         
-        self.criterion = nn.CrossEntropyLoss(ignore_index=self.pad)
+        self.criterion = CEWithLabelSmoothing(self.vocab_size, label_smoothing=self.args['label_smooth'], ignore_index=self.pad)
+        # self.criterion = nn.CrossEntropyLoss(ignore_index=self.pad)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args['lr'])
         self.warmup_scheduler = Noam(
             self.optimizer, self.args['warmup_steps'], self.args['d_model'],
@@ -230,17 +239,18 @@ class TransformerAgent(BaseAgent):
             total_loss += loss.item()
             batch_num += 1
             
-            recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
-            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
-            recoder.add_scalar(f'train-epoch-{idx_}/RunTokenAcc', accuracy, idx)
-            recoder.add_scalar(f'train-epoch-{idx_}/TokenAcc', np.mean(total_acc), idx)
-            pbar.set_description(f'[!] loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}, token acc: {round(accuracy.item(), 4)}|{round(np.mean(total_acc), 4)}')
-        recoder.add_scalar(f'train-whole/TokenAcc', np.mean(total_acc), idx_)
-        recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
+            recoder.add_scalar(f'train-epoch-{idx_}/Loss-{self.args["local_rank"]}', total_loss/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss-{self.args["local_rank"]}', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunTokenAcc-{self.args["local_rank"]}', accuracy, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/TokenAcc-{self.args["local_rank"]}', np.mean(total_acc), idx)
+            pbar.set_description(f'[!] lr: {round(self.optimizer.param_groups[0]["lr"], 6)}, loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}, token acc: {round(accuracy.item(), 4)}|{round(np.mean(total_acc), 4)}')
+        recoder.add_scalar(f'train-whole/TokenAcc-{self.args["local_rank"]}', np.mean(total_acc), idx_)
+        recoder.add_scalar(f'train-whole/Loss-{self.args["local_rank"]}', total_loss/batch_num, idx_)
         return round(total_loss/batch_num, 4)
     
     @torch.no_grad()
     def test_model(self, test_iter, path):
+        spliter = '' if self.args['lang'] == 'zh' else ' '
         def filter(x):
             if '[SEP]' in x:
                 x = x[:x.index('[SEP]')] + '[SEP]'
@@ -266,13 +276,13 @@ class TransformerAgent(BaseAgent):
                     trg_generated.transpose(0, 1), 
                 ):
                     trg_generated_ = self.vocab.convert_ids_to_tokens(trg_generated_)
-                    trg_generated_ = filter(''.join(trg_generated_))
+                    trg_generated_ = filter(spliter.join(trg_generated_))
 
                     src_ = self.vocab.convert_ids_to_tokens(src_)
-                    src_ = filter(''.join(src_))
+                    src_ = filter(spliter.join(src_))
 
                     trg_ = self.vocab.convert_ids_to_tokens(trg_)
-                    trg_ = filter(''.join(trg_))
+                    trg_ = filter(spliter.join(trg_))
 
                     f.write(f'CTX: {src_}\n')
                     f.write(f'REF: {trg_}\n')

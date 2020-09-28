@@ -4,7 +4,7 @@ from dataloader import *
 
 def load_seq2seq_trs_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-    data = TransformerDataset(path, mode=args['mode'], lang=args['lang'])
+    data = TransformerDataset(path, mode=args['mode'], lang=args['lang'], max_length=args['src_len_size'])
     args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
     if args['mode'] == 'train':
         train_sampler = torch.utils.data.distributed.DistributedSampler(data)
@@ -16,7 +16,7 @@ def load_seq2seq_trs_dataset(args):
 
 def load_seq2seq_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-    data = Seq2SeqDataset(path, mode=args['mode'], lang=args['lang'])
+    data = Seq2SeqDataset(path, mode=args['mode'], lang=args['lang'], n_vocab=args['n_vocab'])
     args['vocab'] = data.vocab
     if args['mode'] == 'train':
         train_sampler = torch.utils.data.distributed.DistributedSampler(data)
