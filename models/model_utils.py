@@ -1,14 +1,5 @@
 from .header import *
 
-'''
-1. Attention layer
-2. IR head
-3. ElasticSearch utils
-4. KeyWordParser
-5. ReplayMemory
-6. BalancedDataParallel
-'''
-
 class ReplayMemory:
 
     '''
@@ -462,7 +453,7 @@ class PositionEmbedding(nn.Module):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)   # not the parameters of the Module
+        self.register_buffer('pe', pe)
 
     def forward(self, x):
         x = x + self.pe[:x.size(0), :]

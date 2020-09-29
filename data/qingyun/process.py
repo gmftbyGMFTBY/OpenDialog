@@ -10,11 +10,13 @@ def read_file():
         for i in f:
             try:
                 src, tgt = i
+                src, tgt = src.strip(), tgt.strip()
             except:
                 continue
-            src, tgt = filter_(src), filter_(tgt)
-            if (src and tgt) and (src not in tgt) and (tgt not in src):
-                data.append((src, tgt))
+            # src, tgt = filter_(src), filter_(tgt)
+            # if (src and tgt) and (src not in tgt) and (tgt not in src):
+            #     data.append((src, tgt))
+            data.append((src, tgt))
     return data
 
 def write_file(data):

@@ -110,19 +110,15 @@ class GPT2Agent(BaseAgent):
 
     def __init__(self, total_steps, multi_gpu, vocab_file='data/vocab/vocab_small', run_mode='train', lang='zh', lm=False, local_rank=0):
         super(GPT2Agent, self).__init__()
-        # hyperparameters
         try:
-            # self.gpu_ids = [int(i) for i in multi_gpu.split(',')]
             self.gpu_ids = list(range(len(multi_gpu.split(','))))
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         assert run_mode in ['train', 'test', 'rerank', 'rerank_ir'], f'[!] running mode must be train or test, but got {run_mode}'
         vocab_file = 'data/vocab/vocab_small' if lang == 'zh' else 'data/vocab/vocab_english'
-        lr = 1 if lm else 1.5e-4
         self.args = {
-            'lr': lr,
+            'lr': 5e-4,
             'grad_clip': 1.0,
-            'pad': 0,
             'tgt_len_size': 30,
             'lr_gamma': 0.5,
             'patience': 5,
@@ -131,13 +127,11 @@ class GPT2Agent(BaseAgent):
             'total_steps': total_steps,
             'topk': 2000,
             'topp': 0.97, 
-            'config_path': 'data/config/model_config_dialogue_big.json',
+            'config_path': 'data/config/model_config_dialogue_small.json',
             'multi_gpu': self.gpu_ids,
             'run_mode': run_mode,
             'vocab_file': vocab_file,
             'lang': lang,
-            'topic_transfer': {'音乐': 'music', '体育': 'sport', '数码产品': 'electric', '美食': 'food', '电影': 'movie'},
-            'balanceddata_parallel_gpu0_size': 2,
             'repetition_penalty': 1,
             'amp_level': 'O2',
             'local_rank': local_rank,
@@ -151,6 +145,7 @@ class GPT2Agent(BaseAgent):
         self.sep = self.vocab.convert_tokens_to_ids('[SEP]')
         self.cls = self.vocab.convert_tokens_to_ids('[CLS]')
         self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
+        self.args['pad'] = self.pad
 
         self.model = GPT2(
             self.vocab_size, 
@@ -168,12 +163,13 @@ class GPT2Agent(BaseAgent):
         self.optimizer = transformers.AdamW(
             self.model.parameters(), 
             lr=self.args['lr'], 
-            correct_bias=True)
-        # self.model, self.optimizer = amp.initialize(
-        #     self.model, 
-        #     self.optimizer, 
-        #     opt_level=self.args['amp_level'],
-        # )
+            correct_bias=True,
+        )
+        self.model, self.optimizer = amp.initialize(
+            self.model, 
+            self.optimizer, 
+            opt_level=self.args['amp_level'],
+        )
 
         # need to obtain the whole iter
         self.warmup_scheduler = transformers.get_linear_schedule_with_warmup(
@@ -181,43 +177,12 @@ class GPT2Agent(BaseAgent):
             num_warmup_steps=self.args['warmup_steps'],
             num_training_steps=self.args['total_steps']
         )
-        # train: DataParallel; test: no DataParallel
         if self.args['run_mode'] == 'train':
-            # NOTE:
-            self.model = DataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
-            # self.model = DataParallel(
-            #         self.model, 
-            #         device_ids=self.gpu_ids)
-            # self.model = BalancedDataParallel(
-            #         self.args['balanceddata_parallel_gpu0_size'],
-            #         self.model,
-            #         dim=0)
+            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
         
-        # run_mode == 'chatbot', use the bertretrieval for reranking
         if run_mode in ['test', 'rerank', 'rerank_ir']:
-            '''
-            from multiview import MultiView
-            print(f'[!] MultiView reranker model will be initized')
-            self.reranker = MultiView(
-                topic=True,
-                length=False,
-                nidf_tf=True,
-                coherence=True,
-                fluency=False,
-                repetition_penalty=True,
-                mmi=True,
-                distinct=True,
-                mmi_path='ckpt/train_generative/gpt2_mmi/best.pt',
-                coherence_path='ckpt/train_retrieval/bertretrieval/best.pt',
-                topic_path='ckpt/fasttext/model.bin',
-                fluency_path='ckpt/LM/gpt2lm/best.pt',
-            )
-            print(f'[!] load multiview model over')
-            '''
             from .bert_mc import BERTMCAgent
             from .bert_retrieval import BERTRetrievalAgent
-            # self.reranker = BERTRetrievalAgent(multi_gpu, kb=False)
-            # self.reranker.load_model('ckpt/zh50w/bertretrieval/best.pt')
             self.reranker = BERTMCAgent(multi_gpu, kb=False, model_type='mc')
             self.reranker.load_model('ckpt/zh50w/bertmc/best.pt')
 
@@ -238,12 +203,11 @@ class GPT2Agent(BaseAgent):
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = cid[..., 1:].contiguous()
             loss = self.criterion(
-                     shift_logits.view(-1, shift_logits.size(-1)),
-                    shift_labels.view(-1))
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1))
             _, preds = shift_logits.max(dim=-1)    # [batch, seq]
-            # ignore the pad
-            not_ignore = shift_labels.ne(self.args['pad'])   # pad is 0 or 1
-            num_targets = not_ignore.long().sum().item()    # the number of not pad tokens
+            not_ignore = shift_labels.ne(self.args['pad'])
+            num_targets = not_ignore.long().sum().item()
             correct = (shift_labels == preds) & not_ignore
             correct = correct.float().sum()
             # loss and token accuracy
@@ -251,11 +215,11 @@ class GPT2Agent(BaseAgent):
             total_acc.append(accuracy.item())
             loss = loss / num_targets
             
-            loss.backward()
-            clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
-            # with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-            #     scaled_loss.backward()
-            # clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
+            # loss.backward()
+            # clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+            clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
         
             self.optimizer.step()
             self.warmup_scheduler.step()

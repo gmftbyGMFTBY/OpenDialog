@@ -3,9 +3,14 @@ from utils import *
 from dataloader import *
 
 def load_seq2seq_trs_dataset(args):
+    zh_tokenizer = False
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-    data = TransformerDataset(path, mode=args['mode'], lang=args['lang'], max_length=args['src_len_size'])
+    data = TransformerDataset(path, mode=args['mode'], lang=args['lang'], max_length=args['src_len_size'], n_vocab=args['n_vocab'], zh_tokenizer=zh_tokenizer)
     args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
+    if zh_tokenizer is True:
+        args['vocab'] = data.vocab
+    else:
+        args['vocab'] = None
     if args['mode'] == 'train':
         train_sampler = torch.utils.data.distributed.DistributedSampler(data)
         iter_ = DataLoader(data, sampler=train_sampler, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
@@ -117,14 +122,13 @@ def load_lccc_dataset(args):
 def load_gpt2_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:
-        data = GPT2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'], reversed=args['mmi'])
-        # NOTE:
-        # train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+        data = GPT2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'])
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
         args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
-        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=gpt2_train_collate_fn)
+        iter_ = DataLoader(data, sampler=train_sampler, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
     else:
-        data = GPT2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'], reversed=args['mmi'])
-        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=gpt2_test_collate_fn)
+        data = GPT2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'])
+        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     return iter_

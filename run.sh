@@ -11,7 +11,7 @@ cuda=$4
 
 if [ $mode = 'init' ]; then
     models=(seq2seq transformer bert_na uni lccc lcccir bertmcf bertmc DualLSTM pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 bertretrieval_multiview bertretrieval_cl bertretrieval bertretrieval_dis bertlogic gpt2gan gpt2lm)
-    datasets=(LCCC STC douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
+    datasets=(qingyun LCCC STC douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
     mkdir bak ckpt rest
     for m in ${models[@]}
     do
@@ -59,11 +59,11 @@ elif [ $mode = 'train' ]; then
         --dataset $dataset \
         --model $model \
         --mode train \
-        --batch_size 24 \
-        --n_vocab 70000 \
+        --batch_size 32 \
+        --n_vocab 80000 \
         --epoch 30 \
         --seed 50 \
-        --src_len_size 300 \
+        --src_len_size 256 \
         --tgt_len_size 20 \
         --multi_gpu $cuda \
         --lang $lang

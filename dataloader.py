@@ -248,21 +248,11 @@ class UNIDataset(Dataset):
 class GPT2Dataset(Dataset):
     
     '''
-    Training GPT2 model doesn't need the target sentence, just training the Lnaguage Model
+    Training GPT2 model doesn't need the target sentence, just training the Language Model
     GPT2 model can leverage the ability for all the pure text information, which is better than Seq2Seq architecture
-
-    Train mode: only a long pure text
-    Test/Dev mode: The long context and ground-truth
-
-    :reversed parameter: for the reversed gpt2 language model (DialoGPT MMI Model)
-    :ensemble parameter: for the gpt2retrieval model (need the TestAgent)
-        ensemble mode maybe vyer time-consuming because of the Elasticsearch is used
-    :candidates_k: candides_k will be used when ensemble model is on
     '''
 
-    def __init__(self, path, mode='train', lang='zh',
-                 min_length=20, src_len_size=512, tgt_len_size=128,
-                 reversed=False, ensemble=False, candidates_k=2):
+    def __init__(self, path, mode='train', lang='zh', min_length=20, src_len_size=512, tgt_len_size=128):
         if lang == 'zh':
             vocab_file = 'data/vocab/vocab_small'
         else:
@@ -272,139 +262,43 @@ class GPT2Dataset(Dataset):
         self.vocab = BertTokenizer(vocab_file=vocab_file)
         self.pad_id = self.vocab.convert_tokens_to_ids(self.pad)
         self.src_len_size, self.tgt_len_size = src_len_size, tgt_len_size
-        # load and process the data
-        # CHECK WHETHER EXIST THE PREPROCESSED FILE
-        assert not (reversed and ensemble), f'[!] reversed and ensemble model cannot be used both time'
-        if reversed:
-            self.pp_path = f'{os.path.splitext(path)[0]}_mmi.pkl'
-        elif ensemble:
-            self.pp_path = f'{os.path.splitext(path)[0]}_es.pkl'
-        else:
-            self.pp_path = f'{os.path.splitext(path)[0]}.pkl'
-
+        self.pp_path = f'{os.path.splitext(path)[0]}.pt'
         if os.path.exists(self.pp_path):
-            with open(self.pp_path, 'rb') as f:
-                self.data = pickle.load(f)
+            self.data = torch.load(self.pp_path)
             print(f'[!] load preprocessed file from {self.pp_path}')
-            # Dataset object must return None
             return None 
 
-        # PREPROCESSED
-        if reversed:
-            data = read_text_data_reversed(path)
-        elif ensemble:
-            # load the chinese word2vector embedding
-            w2v = load_w2v('data/chinese_w2v')
-            from models import TestAgent
-            data = read_text_data(path)
-            # search all the candidates of the samples in the dataset
-            # default batch size is 1024 
-            irmodel = TestAgent()
-            batch_size, data_candidates, index = 256, [], 0
-            with tqdm(total=len(data)) as pbar:
-                while index < len(data):
-                    batch = data[index:index+batch_size]
-                    # query = [i[0] for i in batch]
-                    # be careful, the very long context will raise the retrieval error for elasticsearch
-                    query = [i[0][-300:] for i in batch]
-                    rest = irmodel.MultiSearch(query, samples=candidates_k)
-                    data_candidates.extend(rest)    # dataset_size*[k]
-                    c_batch_size = len(batch)
-                    pbar.update(c_batch_size)
-                    index += c_batch_size
-            print(f'[!] obtain all the retrieval samples')
-        else:
-            data = read_text_data(path)
+        data = read_text_data(path)
         self.data = []
         if self.mode in ['train', 'dev']:
-            contexts = []
-            for sample in data:
-                contexts.append(' [SEP] '.join(sample))
-            if ensemble:
-                for sample, candidates in tqdm(list(zip(contexts, data_candidates))):
-                    bundle = dict()
-                    # obtain the retrieval samples
-                    bundle['retrieval_text'] = candidates 
-                    embeddings = convert_text_embedding(w2v, candidates)
-                    bundle['retrieval_embedding'] = embeddings    # k*[300]
-                    # 
-                    bundle['context_text'] = sample
-                    ids = self.vocab.encode(sample)
-                    if len(ids) < min_length:
-                        continue
-                    # length size of the context
-                    ids = ids[-self.src_len_size:]
-                    bundle['context_id'] = torch.LongTensor(ids)
-                    self.data.append(bundle)
-            # NOTE: sort the self.data based on the length for miniminzing the padding tokens
-            else:
-                for sample in tqdm(contexts):
-                    bundle = dict()
-                    bundle['context_text'] = sample
-                    ids = self.vocab.encode(sample)
-                    if len(ids) < min_length:
-                        continue
-                    # length size of the context
-                    ids = ids[-self.src_len_size:]
-                    # NOTE
-                    # bundle['token_type'] = generate_token_type_ids(ids)
-                    bundle['context_id'] = torch.LongTensor(ids)
-                    self.data.append(bundle)
-            # NOTE: sort the self.data based on the length for miniminzing the padding tokens
+            contexts = [' [SEP] '.join(sample) for sample in data]
+            for sample in tqdm(contexts):
+                bundle = dict()
+                bundle['context_text'] = sample
+                ids = self.vocab.encode(sample)
+                if len(ids) < min_length:
+                    continue
+                bundle['context_id'] = ids[-self.src_len_size:]
+                self.data.append(bundle)
             self.data = sorted(self.data, key=lambda x: len(x['context_id']))
         else:
             contexts, responses = [], []
             for sample in data:
                 contexts.append(' [SEP] '.join(sample[:-1]))
                 responses.append(sample[-1])
-            if ensemble:
-                for c, r, candidates in tqdm(list(zip(contexts, responses, data_candidates))):
-                    bundle = dict()
-                    bundle['retrieval_text'] = candidates 
-                    rest = []
-                    for candidate in candidates:
-                        batch = torch.LongTensor(
-                                    self.vocab.encode(candidate)[-self.src_len_size:]
-                                )
-                        rest.append(batch)
-                    bundle['retrieval_ids'] = rest    # k*[seq]
-                    bundle['context_text'] = c
-                    bundle['reply_text'] = r
-                    ids = self.vocab.encode(c)
-                    if len(ids) < min_length:
-                        continue
-                    # length size of the context
-                    ids = ids[-self.src_len_size:]
-                    bundle['context_id'] = torch.LongTensor(ids)
-                    ids = self.vocab.encode(r)
-                    # length size of the context
-                    ids = ids[:self.tgt_len_size]
-                    bundle['reply_id'] = torch.LongTensor(ids)
-            else:
-                for c, r in tqdm(list(zip(contexts, responses))):
-                    bundle = dict()
-                    bundle['context_text'] = c
-                    bundle['reply_text'] = r
-                    ids = self.vocab.encode(c)
-                    # NOTE: Data Augmentation Delete these two lines
-                    # if len(ids) < min_length:
-                    #     continue
-                    # length size of the context
-                    ids = ids[-self.src_len_size:]
-                    bundle['context_id'] = torch.LongTensor(ids)
-                    # NOTE
-                    # bundle['context_token_type'] = generate_token_type_ids(ids)
-                    ids = self.vocab.encode(r)
-                    # length size of the context
-                    ids = ids[:self.tgt_len_size]
-                    # bundle['reply_token_type'] = 0 if bundle['context_token_type'][-1] == 1 else 1
-                    bundle['reply_id'] = torch.LongTensor(ids)
-                    self.data.append(bundle)
+            for c, r in tqdm(list(zip(contexts, responses))):
+                bundle = dict()
+                bundle['context_text'] = c
+                bundle['reply_text'] = r
+                ids = self.vocab.encode(c)
+                bundle['context_id'] = ids[-self.src_len_size:]
+                ids = self.vocab.encode(r)
+                bundle['reply_id'] = ids[:self.tgt_len_size]
+                self.data.append(bundle)
         print(f'[!] read and process raw data from {path} over')
 
     def save_pickle(self):
-        with open(self.pp_path, 'wb') as f:
-            pickle.dump(self.data, f)
+        torch.save(self.data, self.pp_path)
         print(f'[!] save dataset into {self.pp_path}')
 
     def __len__(self):
@@ -412,6 +306,21 @@ class GPT2Dataset(Dataset):
 
     def __getitem__(self, i):
         return self.data[i]
+    
+    def collate(self, batch):
+        if self.mode in ['train', 'dev']:
+            ctx = [torch.LongTensor(i['context_id']) for i in batch]
+            random.shuffle(ctx)
+            ctx = pad_sequence(ctx, batch_first=True, padding_value=self.pad_id)
+            if torch.cuda.is_available():
+                ctx = ctx.cuda()
+            return ctx
+        else:
+            assert len(batch) == 1, f'[!] batch must be 1, but got {len(batch)}'
+            ctx, res = torch.LongTensor(batch[0]['context_id']), torch.LongTensor(batch[0]['reply_id'])
+            if torch.cuda.is_available():
+                ctx, res = ctx.cuda(), res.cuda()
+            return ctx, res
 
 class MultiGPT2Dataset(Dataset):
 
@@ -1733,40 +1642,56 @@ class TransformerDataset(Dataset):
     Seq2Seq-attn or Transformer DataLoader
     '''
     
-    def __init__(self, path, mode='train', lang='zh', max_length=256):
+    def __init__(self, path, mode='train', lang='zh', max_length=256, zh_tokenizer=False, n_vocab=80000):
         self.mode = mode
         if lang == 'zh':
-            self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+            if not zh_tokenizer:
+                self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+            else:
+                print(f'[!] use chinese tokenizer ...')
         else:
             self.vocab = BertTokenizer.from_pretrained('bert-base-uncased')
-        self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
         
         self.pp_path = f'{os.path.splitext(path)[0]}_trs.pt'
         if os.path.exists(self.pp_path):
-            self.data = torch.load(self.pp_path)
+            if not zh_tokenizer:
+                self.data = torch.load(self.pp_path)
+                self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
+            else:
+                self.vocab, self.data = torch.load(self.pp_path)
+                self.pad_id = self.vocab.vocab.stoi['[PAD]']
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
         
         with open(path, 'r', encoding='utf-8') as f:
             dataset = read_text_data(path)
+            if zh_tokenizer:
+                self.vocab = ChineseTokenizer(dataset, n_vocab=n_vocab)
+                self.vocab_size = self.vocab.size
+                print(f'[!] create the chinese vocab over ... vocab size: {self.vocab_size}')
+                self.pad_id = self.vocab.vocab.stoi['[PAD]']
+            else:
+                self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
             responses = [i[-1] for i in dataset]
             contexts = [' [SEP] '.join(i[:-1]) for i in dataset]
             self.data = []
             for context, response in tqdm(list(zip(contexts, responses))):
-                rid = self.vocab.encode(response)[-max_length:]
-                rid_pos = np.arange(1, 1 + len(rid))
-                cid = self.vocab.encode(context)[-max_length:]
-                cid_pos = np.arange(1, 1 + len(cid))
-                bundle = {
-                    'cid': cid,
-                    'cid_pos': cid_pos,
-                    'rid': rid,
-                    'rid_pos': rid_pos,
-                }
+                if zh_tokenizer:
+                    rid = self.vocab.encode(response, max_length)
+                    cid = self.vocab.encode(context, max_length)
+                else:
+                    rid = self.vocab.encode(response)[-max_length:]
+                    cid = self.vocab.encode(context)[-max_length:]
+                bundle = {'cid': cid, 'rid': rid}
                 self.data.append(bundle)
             self.data = sorted(self.data, key=lambda x: len(x['cid']))
             print(f'[!] collect {len(self.data)} samples for training')
-            torch.save(self.data, self.pp_path)
+            
+            if mode == 'train':
+                if zh_tokenizer:
+                    torch.save([self.vocab, self.data], self.pp_path)
+                else:
+                    torch.save(self.data, self.pp_path)
             print(f'[!] process the dataset and write it into {self.pp_path}')
             
     def __len__(self):
@@ -1780,37 +1705,29 @@ class TransformerDataset(Dataset):
             [torch.tensor(instance['cid'], dtype=torch.long) for instance in batch],
             batch_first=False, padding_value=self.pad_id,
         )
-        src_pos = pad_sequence(
-            [torch.tensor(instance['cid_pos'], dtype=torch.long) for instance in batch],
-            batch_first=False, padding_value=self.pad_id,
-        )
         trg = pad_sequence(
             [torch.tensor(instance['rid'], dtype=torch.long) for instance in batch],
-            batch_first=False, padding_value=self.pad_id,
-        )
-        trg_pos = pad_sequence(
-            [torch.tensor(instance['rid_pos'], dtype=torch.long) for instance in batch],
             batch_first=False, padding_value=self.pad_id,
         )
         trg_mask, src_key_padding_mask, trg_key_padding_mask, memory_key_padding_mask = get_masks(
             src, trg, PAD=self.pad_id)
         if torch.cuda.is_available():
-            src, src_pos = src.cuda(), src_pos.cuda()
-            trg, trg_pos = trg.cuda(), trg_pos.cuda()
+            src, trg = src.cuda(), trg.cuda()
             trg_mask = trg_mask.cuda()
             src_key_padding_mask = src_key_padding_mask.cuda()
             trg_key_padding_mask = trg_key_padding_mask.cuda()
             memory_key_padding_mask = memory_key_padding_mask.cuda()
-        return src, trg, src_pos, trg_pos, trg_mask, src_key_padding_mask, trg_key_padding_mask, memory_key_padding_mask
+        return src, trg, trg_mask, src_key_padding_mask, trg_key_padding_mask, memory_key_padding_mask
         
 class Seq2SeqDataset(Dataset):
     
     '''
-    Seq2Seq-attn or Transformer DataLoader
+    Seq2Seq-attn DataLoader
     '''
     
     def __init__(self, path, mode='train', lang='zh', max_length=256, n_vocab=50000):
         self.mode = mode
+        # both test and train load the train_s2s.pt dataset
         self.pp_path = f'{os.path.split(path)[0]}/train_s2s.pt'
         if os.path.exists(self.pp_path):
             self.vocab, self.data = torch.load(self.pp_path)
@@ -1821,21 +1738,26 @@ class Seq2SeqDataset(Dataset):
         
         with open(path, 'r', encoding='utf-8') as f:
             dataset = read_text_data(path)
-            dataset = random.sample(dataset, 500000)
+            # dataset = random.sample(dataset, 500000)
             if self.mode == 'train':
-                self.vocab = ChineseTokenizer(dataset, n_vocab=n_vocab)
-                self.pad_id = self.vocab.vocab.stoi['[PAD]']
+                if lang == 'zh':
+                    self.vocab = ChineseTokenizer(dataset, n_vocab=n_vocab)
+                    self.pad_id = self.vocab.vocab.stoi['[PAD]']
+                else:
+                    self.vocab = BertTokenizer.from_pretrained('bert-base-uncased')
+                    self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
                 print('[!] init the vocabulary over')
             responses = [i[-1] for i in dataset]
             contexts = ['[SEP]'.join(i[:-1]) for i in dataset]
             self.data = []
             for context, response in tqdm(list(zip(contexts, responses))):
-                rid = self.vocab.encode(response.strip(), max_length)
-                cid = self.vocab.encode(context.strip(), max_length)
-                bundle = {
-                    'cid': cid,
-                    'rid': rid,
-                }
+                if lang == 'zh':
+                    rid = self.vocab.encode(response.strip(), max_length)
+                    cid = self.vocab.encode(context.strip(), max_length)
+                else:
+                    rid = self.vocab.encode(response.strip())[-max_length:]
+                    cid = self.vocab.encode(context.strip())[-max_length:]
+                bundle = {'cid': cid, 'rid': rid}
                 self.data.append(bundle)
             print(f'[!] collect {len(self.data)} samples for training')
         if mode == 'train':
