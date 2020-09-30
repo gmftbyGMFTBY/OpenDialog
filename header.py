@@ -38,6 +38,7 @@ import argparse
 from torch.nn.utils.rnn import pad_sequence
 from data import generate_negative_samples
 from models.model_utils import ESChat
+from models.test import TestAgent
 from elasticsearch import Elasticsearch
 from multiview.diversity import *
 

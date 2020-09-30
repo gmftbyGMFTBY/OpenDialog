@@ -29,6 +29,8 @@ def collect_parameter_4_model(args):
         return (args['multi_gpu'], args['vocab']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
     elif args['model'] == 'gpt2':
         return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
+    elif args['model'] == 'gpt2v2':
+        return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
     elif args['model'] == 'pfgpt2':
         return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang']}
     elif args['model'] == 'kwgpt2':

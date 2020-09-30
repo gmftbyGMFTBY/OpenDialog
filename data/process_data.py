@@ -131,8 +131,8 @@ if __name__ == "__main__":
     args = vars(args)
     if args['mode'] == 'insert':
         # collect_samples_qq('retrieval_database')
-        collect_samples_qq('retrieval_database')
-        # collect_samples_qq_zh50w('zh50w_database')
+        # collect_samples_qq('retrieval_database')
+        collect_samples_qq_zh50w('zh50w_database')
     elif args['mode'] == 'generative':
         # train, test mode (99:1), without dev
         # prepare the generative dataset

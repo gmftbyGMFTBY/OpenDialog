@@ -37,7 +37,8 @@ class TestAgent(BaseAgent):
             p = []
             for i in item:
                 i = i['_source']
-                p.append(f'{i["context"]} [SEP] {i["response"]}')
+                # p.append(f'{i["context"]} [SEP] {i["response"]}')
+                p.append(i["response"])
             data.append(p)
         return data
 
@@ -88,5 +89,4 @@ class MultiViewTestAgent(RetrievalBaseAgent):
 
 if __name__ == "__main__":
     agent = TestAgent()
-    ipdb.set_trace()
     data = agent.MultiSearch(['公主岭'])

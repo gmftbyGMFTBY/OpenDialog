@@ -33,6 +33,8 @@ def load_dataset(args):
     elif args['model'] == 'gpt2':
         args['mmi'] = False
         return load_gpt2_dataset(args)
+    elif args['model'] == 'gpt2v2':
+        return load_gpt2v2_dataset(args)
     elif args['model'] == 'pone':
         return load_pone_dataset(args)
     elif args['model'] == 'pfgpt2':
@@ -82,6 +84,7 @@ def main(**args):
         'DualLSTM': DualLSTMAgent, 
         'seq2seq': Seq2SeqAgent,
         'gpt2': GPT2Agent,
+        'gpt2v2': GPT2V2Agent,
         'gpt2retrieval': GPT2RetrievalAgent,
         'pfgpt2': PFGPT2Agent,
         'kwgpt2': KWGPT2Agent,

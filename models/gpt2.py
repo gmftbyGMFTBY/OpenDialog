@@ -3,7 +3,7 @@ from .test import TestAgent
 
 class GPT2(nn.Module):
 
-    def __init__(self, vocab_size, unk_id, sep_id, topk, topp, 
+    def __init__(self, vocab_size, unk_id, sep_id, cls_id, topk, topp, 
                  repetition_penalty,
                  config_path='data/config/model_config_dialogue_small.json'):
         super(GPT2, self).__init__()
@@ -14,6 +14,7 @@ class GPT2(nn.Module):
         self.topk, self.topp = topk, topp
         self.unk_id = unk_id
         self.sep_id = sep_id
+        self.cls_id = cls_id
         self.repetition_penalty = repetition_penalty
 
     def forward(self, inpt_ids):
@@ -30,22 +31,14 @@ class GPT2(nn.Module):
     @torch.no_grad()
     def predict(self, inpt_ids, max_len):
         '''
-        batch_size is 1
-        inpt_ids: [seq]
-        token_type_ids: [seq]
-        return a list of ids (generated)
-        no pad, do not need attention_mask
-        '''
-        # ipdb.set_trace()
-        generated = []
+        batch_size is 1; inpt_ids: [seq]; return a list of ids (generated)'''
+        generated = [self.cls_id]
         for _ in range(max_len):
             outputs = self.model(
                 input_ids=inpt_ids
             )
-            next_token_logits = outputs[0][-1, :]    # [vocab]
-            # ignore the [UNK] token
+            next_token_logits = outputs[0][-1, :]    # [V]
             next_token_logits[self.unk_id] = -np.inf
-            # repetition penalty
             if generated:
                 next_token_logits[list(set(generated))] /= self.repetition_penalty
             filtered_logits = top_k_top_p_filtering(
@@ -55,14 +48,11 @@ class GPT2(nn.Module):
             next_token = torch.multinomial(
                     F.softmax(filtered_logits, dim=-1),
                     num_samples=1)
+            generated.append(next_token.item())
             if next_token == self.sep_id:
                 break
-            generated.append(next_token.item())
             inpt_ids = torch.cat((inpt_ids, next_token), dim=0)
-            # remember to cut off 
             inpt_ids = inpt_ids[-self.n_ctx:]
-            # token_type_ids = torch.cat((token_type_ids, speaker), dim=0)
-            # token_type_ids = token_type_ids[-self.n_ctx:]
         return generated
 
     @torch.no_grad()
@@ -117,13 +107,11 @@ class GPT2Agent(BaseAgent):
         assert run_mode in ['train', 'test', 'rerank', 'rerank_ir'], f'[!] running mode must be train or test, but got {run_mode}'
         vocab_file = 'data/vocab/vocab_small' if lang == 'zh' else 'data/vocab/vocab_english'
         self.args = {
-            'lr': 5e-4,
+            'lr': 1.5e-4,
             'grad_clip': 1.0,
             'tgt_len_size': 30,
             'lr_gamma': 0.5,
-            'patience': 5,
-            'min_lr': 1e-5,
-            'warmup_steps': 2000,
+            'warmup_steps': 8000,
             'total_steps': total_steps,
             'topk': 2000,
             'topp': 0.97, 
@@ -151,6 +139,7 @@ class GPT2Agent(BaseAgent):
             self.vocab_size, 
             self.unk, 
             self.sep,
+            self.cls,
             self.args['topk'], 
             self.args['topp'], 
             self.args['repetition_penalty'],
@@ -271,9 +260,7 @@ class GPT2Agent(BaseAgent):
 
     @torch.no_grad()
     def test_model(self, test_iter, path):
-        '''
-        Generate the test dataset and measure the performance
-        '''
+        '''Generate the test dataset and measure the performance'''
         def filter(x):
             return x.replace('[PAD]', '')
         self.model.eval()

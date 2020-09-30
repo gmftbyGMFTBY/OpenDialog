@@ -1483,71 +1483,81 @@ class GPT2LMDataset(Dataset):
     def __getitem__(self, i):
         return self.data[i]
 
-class KWGPT2Dataset(Dataset):
+class GPT2V2Dataset(Dataset):
+    
+    '''retrieval some candidate for generation; the context tokens are masked; retrieval responses and the conversation context will be used as the semantic controllor'''
 
-    def __init__(self, path, mode='train', min_length=25, lang='zh', src_len_size=512, tgt_len_size=128):
-        if lang == 'zh':
-            vocab_file = 'data/vocab/vocab_small'
-        else:
-            vocab_file = 'data/vocab/vocab_english'
+    def __init__(self, path, mode='train', min_length=20, lang='zh', src_len_size=512, tgt_len_size=128, candidate=2):
+        vocab_file = 'data/vocab/vocab_small' if lang == 'zh' else 'data/vocab/vocab_english'
         self.mode = mode
-        # tokenizer with addtional tokens
+        
         self.vocab = BertTokenizer(vocab_file=vocab_file)
-        additional_tokens = {'additional_special_tokens': ['[STP]']}
-        self.vocab.add_special_tokens(additional_tokens)
-        self.src_len_size, self.tgt_len_size = src_len_size, tgt_len_size
-        #
-        self.pp_path = f'{os.path.splitext(path)[0]}_kw.pkl'
+        self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
+        self.cls_id = self.vocab.convert_tokens_to_ids('[CLS]')
+        self.sep_id = self.vocab.convert_tokens_to_ids('[SEP]')
+        
+        self.src_len_size, self.tgt_len_size, self.candidate = src_len_size, tgt_len_size, candidate
+        
+        # init the elasticsearch retrieval
+        self.retrieval = TestAgent(kb=False)
+        print(f'[!] elasticsearch retrieval module init over')
+        
+        self.pp_path = f'{os.path.splitext(path)[0]}_v2.pt'
         if os.path.exists(self.pp_path):
-            with open(self.pp_path, 'rb') as f:
-                self.data = pickle.load(f)
+            self.data = torch.load(self.pp_path)
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
-        # 
+        
         data = read_text_data(path)
         self.data = []
         if self.mode in ['train', 'dev']:
             contexts = [i[0] for i in data]
             responses = [i[1] for i in data]
-            for ctx, res in tqdm(list(zip(contexts, responses))):
-                bundle = dict()
-                # obtain the keywords
-                keywords = kwgpt2_utils(res)
-                if keywords is None:
-                    continue
-                sample = f'{ctx} [STP] {keywords} [STP] {res} [STP]'
-                bundle['context_text'] = sample
-                ids = self.vocab.encode(sample)[:-1]
-                if len(ids) < min_length:
-                    continue
-                ids = ids[-self.src_len_size:]
-                bundle['context_id'] = torch.LongTensor(ids)
-                self.data.append(bundle)
+            index, query_batch_size, dataset_size = 0, 256, len(data)
+            for begin_index in tqdm(list(range(0, dataset_size, query_batch_size))):
+                ipdb.set_trace()
+                inner_contexts = contexts[begin_index:begin_index+query_batch_size]
+                inner_responses = responses[begin_index:begin_index+query_batch_size]
+                # [query_batch_size, candidates] type is list
+                inner_candidates = self.retrieval.MultiSearch(inner_contexts, samples=self.candidate)
+                for ctx, res, can in tqdm(list(zip(inner_contexts, inner_responses, inner_candidates))):
+                    bundle = dict()
+                    ctx_tokens = self.vocab.convert_tokens_to_ids(self.vocab.tokenize(ctx))
+                    res_tokens = self.vocab.convert_tokens_to_ids(self.vocab.tokenize(res))
+                    sequence = [self.cls_id] + ctx_tokens + [self.sep_id] + res_tokens + [self.sep_id]
+                    if len(sequence) < min_length:
+                        continue
+                    bundle['context_text'] = ctx.replace('[SEP]', '')
+                    bundle['response_text'] = can
+                    
+                    bundle['ids'] = sequence
+                    bundle['labels'] = [self.pad_id] * (len(ctx_tokens) + 1) + res_tokens + [self.sep_id]
+                    bundle['ids'] = bundle['ids'][-self.src_len_size:]
+                    bundle['labels'] = bundle['labels'][-self.src_len_size:]
+                    self.data.append(bundle)
             self.data = sorted(self.data, key=lambda x: len(x['context_id']))
         else:
             contexts = [i[0] for i in data]
             responses = [i[1] for i in data]
-            for ctx, res in tqdm(list(zip(contexts, responses))):
-                # DO NOT ADD THE Keywords for the test running mode
-                bundle = dict()
-                # obtain the keywords
-                keywords = kwgpt2_utils(res)
-                if keywords is None:
-                    continue
-                bundle['context_text'] = ctx
-                ctx = f'{ctx} [STP]'
-                ids = self.vocab.encode(ctx)[:-1]    # ignore the final [SEP]
-                if len(ids) < min_length:
-                    continue
-                ids = ids[-self.src_len_size:]
-                bundle['context_id'] = torch.LongTensor(ids)
-                ids = self.vocab.encode(f'{keywords} [STP] {res} [STP]')[1:]   # ignore the [CLS]
-                bundle['reply_id'] = torch.LongTensor(ids)
-                self.data.append(bundle)
+            index, query_batch_size, dataset_size = 0, 128, len(data)
+            for begin_index in tqdm(list(range(0, dataset_size, query_batch_size))):
+                inner_contexts = contexts[begin_index:begin_index+query_batch_size]
+                inner_responses = responses[begin_index:begin_index+query_batch_size]
+                # [query_batch_size, candidates] type is list
+                inner_candidates = self.retrieval.MultiSearch(inner_contexts, samples=self.candidate)
+                for ctx, res, can in tqdm(list(zip(inner_contexts, inner_responses, inner_candidates))):
+                    bundle = dict()
+                    ctx_tokens = self.vocab.encode(ctx)
+                    res_tokens = self.vocab.encode(res)
+                    if len(ctx_tokens) < min_length:
+                        continue
+                    bundle['ids'] = ctx_tokens[-self.src_len_size:]
+                    bundle['rids'] = res_tokens
+                    bundle['context_text'] = ctx.replace('[SEP]', '')
+                    bundle['response_text'] = can
+                    self.data.append(bundle)
         print(f'[!] read and process raw data from {path} over')
-        # save the data
-        with open(self.pp_path, 'wb') as f:
-            pickle.dump(self.data, f)
+        torch.save(self.data, f)
         print(f'[!] save dataset into {self.pp_path}')
 
     def __len__(self):
@@ -1555,6 +1565,36 @@ class KWGPT2Dataset(Dataset):
 
     def __getitem__(self, i):
         return self.data[i]
+    
+    def collate(self, batch):
+        if self.mode in ['train', 'dev']:
+            ids = [torch.LongTensor(i['ids']) for i in batch]
+            labels = [torch.LongTensor(i['labels']) for i in batch]
+            ctx_text = [i['context_text'] for i in batch]
+            candidate_text = [i['response_text'] for i in batch]
+            
+            # shuffle
+            random_idx = list(range(len(batch)))
+            random.shuffle(random_idx)
+            ids = [ids[i] for i in random_idx]
+            labels = [labels[i] for i in random_idx]
+            ctx_text = [ctx_text[i] for i in random_idx]
+            candidate_text = [candidate_text[i] for i in random_idx]
+            
+            ids = pad_sequence(ids, batch_first=True, padding_value=self.pad_id)
+            labels = pad_sequence(labels, batch_first=True, padding_value=self.pad_id)
+            if torch.cuda.is_available():
+                ids, labels = ids.cuda(), labels.cuda()
+            return ids, labels, ctx_text, candidate_text
+        else:
+            assert len(batch) == 1, f'[!] batch must be 1, but got {len(batch)}'
+            ids = torch.LongTensor(batch[0]['ids'])
+            rids = torch.LongTensor(batch[0]['rids'])
+            ctx_text = batch[0]['context_text']
+            candidate_text = bathc[0]['response_text']
+            if torch.cuda.is_available():
+                ids = ctx.cuda()
+            return ids, rids, ctx_text, candidate_text
 
 # ========== PONE ========== #
 class PONEDataset(Dataset):
@@ -1901,7 +1941,10 @@ if __name__ == "__main__":
     # train_data = UNIDataset('/data/lantian/data/LCCD_GPT', 'data/LCCC/LCCC-base.json')
     # train_iter = DataLoader(train_data, collate_fn=train_data.collate, batch_size=10)
     # ========== Seq2Seq ========== #
-    train_data = Seq2SeqDataset('data/zh50w/train.txt', mode='train')
+    # train_data = Seq2SeqDataset('data/zh50w/train.txt', mode='train')
+    # train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
+    # ========== GPT2V2 ========== #
+    train_data = GPT2V2Dataset('./data/zh50w/train.txt', mode='train')
     train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
     # ========= ITERATE ========= # 
     for batch in tqdm(train_iter):

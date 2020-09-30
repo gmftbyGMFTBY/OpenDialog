@@ -123,11 +123,27 @@ def load_gpt2_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:
         data = GPT2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'])
-        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
         args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
         iter_ = DataLoader(data, sampler=train_sampler, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
     else:
         data = GPT2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'])
+        args['total_steps'] = 100
+        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
+    if not os.path.exists(data.pp_path):
+        data.save_pickle()
+    return iter_
+
+def load_gpt2v2_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    if args['mode'] in ['train', 'dev']:
+        data = GPT2V2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'])
+        args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+        iter_ = DataLoader(data, sampler=train_sampler, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
+    else:
+        data = GPT2V2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'])
+        args['total_steps'] = 100
         iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
     if not os.path.exists(data.pp_path):
         data.save_pickle()
