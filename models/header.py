@@ -4,6 +4,7 @@ from torch.nn.parallel.parallel_apply import parallel_apply
 from torch.nn.parallel._functions import Scatter
 import numpy as np
 import math
+import gensim
 from queue import *
 import jieba.analyse
 import ipdb

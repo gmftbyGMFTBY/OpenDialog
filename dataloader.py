@@ -1515,12 +1515,13 @@ class GPT2V2Dataset(Dataset):
             responses = [i[1] for i in data]
             index, query_batch_size, dataset_size = 0, 256, len(data)
             for begin_index in tqdm(list(range(0, dataset_size, query_batch_size))):
-                ipdb.set_trace()
                 inner_contexts = contexts[begin_index:begin_index+query_batch_size]
                 inner_responses = responses[begin_index:begin_index+query_batch_size]
                 # [query_batch_size, candidates] type is list
                 inner_candidates = self.retrieval.MultiSearch(inner_contexts, samples=self.candidate)
-                for ctx, res, can in tqdm(list(zip(inner_contexts, inner_responses, inner_candidates))):
+                for ctx, res, can in list(zip(inner_contexts, inner_responses, inner_candidates)):
+                    if len(can) < self.candidate:
+                        continue
                     bundle = dict()
                     ctx_tokens = self.vocab.convert_tokens_to_ids(self.vocab.tokenize(ctx))
                     res_tokens = self.vocab.convert_tokens_to_ids(self.vocab.tokenize(res))
@@ -1532,10 +1533,14 @@ class GPT2V2Dataset(Dataset):
                     
                     bundle['ids'] = sequence
                     bundle['labels'] = [self.pad_id] * (len(ctx_tokens) + 1) + res_tokens + [self.sep_id]
-                    bundle['ids'] = bundle['ids'][-self.src_len_size:]
-                    bundle['labels'] = bundle['labels'][-self.src_len_size:]
+                    
+                    # NOTE:
+                    if len(bundle['ids']) > self.src_len_size:
+                        cut_size = len(bundle['ids']) - self.src_len_size
+                        bundle['ids'] = bundle['ids'][cut_size:]
+                        bundle['labels'] = bundle['labels'][cut_size:]
                     self.data.append(bundle)
-            self.data = sorted(self.data, key=lambda x: len(x['context_id']))
+            self.data = sorted(self.data, key=lambda x: len(x['ids']))
         else:
             contexts = [i[0] for i in data]
             responses = [i[1] for i in data]
@@ -1545,19 +1550,25 @@ class GPT2V2Dataset(Dataset):
                 inner_responses = responses[begin_index:begin_index+query_batch_size]
                 # [query_batch_size, candidates] type is list
                 inner_candidates = self.retrieval.MultiSearch(inner_contexts, samples=self.candidate)
-                for ctx, res, can in tqdm(list(zip(inner_contexts, inner_responses, inner_candidates))):
+                for ctx, res, can in list(zip(inner_contexts, inner_responses, inner_candidates)):
+                    if len(can) < self.candidate:
+                        continue
                     bundle = dict()
                     ctx_tokens = self.vocab.encode(ctx)
                     res_tokens = self.vocab.encode(res)
                     if len(ctx_tokens) < min_length:
                         continue
-                    bundle['ids'] = ctx_tokens[-self.src_len_size:]
+                    bundle['ids'] = ctx_tokens
+                    # NOTE:
+                    if len(bundle['ids']) > self.src_len_size:
+                        cut_size = len(bundle['ids']) - self.src_len_size
+                        bundle['ids'] = ctx_tokens[cut_size:]
                     bundle['rids'] = res_tokens
                     bundle['context_text'] = ctx.replace('[SEP]', '')
                     bundle['response_text'] = can
                     self.data.append(bundle)
         print(f'[!] read and process raw data from {path} over')
-        torch.save(self.data, f)
+        torch.save(self.data, self.pp_path)
         print(f'[!] save dataset into {self.pp_path}')
 
     def __len__(self):

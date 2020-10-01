@@ -33,7 +33,7 @@ class GPT2V2(nn.Module):
             input_ids=inpt_ids,
         )
         output = outputs[0]    # [batch, seq, 768]
-        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=1)).expand(-1, output.shape[1], -1)    # [batch, seq, 32]
+        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=-1)).unsqueeze(1).expand(-1, output.shape[1], -1)    # [batch, seq, 32]
         output = torch.cat([output, policy_embd], dim=-1)    # [batch, seq, 768+32]
         output = self.proj(output)    # [batch, seq, vocab]
         return output
@@ -42,7 +42,7 @@ class GPT2V2(nn.Module):
     def predict(self, inpt_ids, context_embd, response_embd, max_len):
         '''batch_size is 1; inpt_ids: [seq]; return a list of ids (generated)'''
         generated = [self.cls_id]
-        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=1)).expand(-1, output.shape[1], -1)    # [32]
+        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=1)).unsqueeze(1).expand(-1, output.shape[1], -1)    # [32]
         for _ in range(max_len):
             outputs = self.model(
                 input_ids=inpt_ids
@@ -98,7 +98,7 @@ class GPT2V2Agent(BaseAgent):
             'local_rank': local_rank,
             'policy_size': 32,
             'embedding_size': 300,
-            'word2vec': 'data/chinese_w2v.txt' if lang == 'zh' else 'data/english_w2v.bin',
+            'word2vec': 'data/chinese_w2v' if lang == 'zh' else 'data/english_w2v.bin',
         }
         self.vocab = BertTokenizer(vocab_file=self.args['vocab_file'])
         self.vocab_size = len(self.vocab)
@@ -108,7 +108,7 @@ class GPT2V2Agent(BaseAgent):
         self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
         self.args['pad'] = self.pad
 
-        self.model = GPT2(
+        self.model = GPT2V2(
             self.vocab_size, 
             self.unk, 
             self.sep,
@@ -120,7 +120,11 @@ class GPT2V2Agent(BaseAgent):
             embedding_size=self.args['embedding_size'],
         )
         
-        self.w2v = load_w2v(self.args['word2vec'])
+        # load the word2vec
+        if lang == 'zh':
+            self.w2v = load_w2v('data/chinese_w2v')
+        else:
+            self.w2v = gensim.models.KeyedVectors.load_word2vec_format('data/english_w2v.bin', binary=True)
         
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.args['pad'], reduction='sum')
         if torch.cuda.is_available():
@@ -160,19 +164,22 @@ class GPT2V2Agent(BaseAgent):
                     self.w2v,
                     [i[idx] for i in response_text],
                 )    # [batch, 300]
-                r_embd.append(response_embd)
+                r_embd.append(torch.tensor(response_embd))
             r_embd = torch.stack(r_embd).mean(dim=0).cuda()    # [batch, 300]
             self.optimizer.zero_grad()
 
             logits = self.model(cid, context_embd, r_embd)    # [batch, seq, vocab]
             shift_logits = logits[..., :-1, :].contiguous()
-            loss = self.criterion(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                labels.view(-1))
+            try:
+                loss = self.criterion(
+                    shift_logits.view(-1, shift_logits.size(-1)),
+                    labels.view(-1))
+            except:
+                ipdb.set_trace()
             _, preds = shift_logits.max(dim=-1)    # [batch, seq]
-            not_ignore = shift_labels.ne(self.args['pad'])
+            not_ignore = labels.ne(self.args['pad'])
             num_targets = not_ignore.long().sum().item()
-            correct = (shift_labels == preds) & not_ignore
+            correct = (labels == preds) & not_ignore
             correct = correct.float().sum()
             # loss and token accuracy
             accuracy = correct / num_targets
@@ -217,7 +224,7 @@ class GPT2V2Agent(BaseAgent):
                         self.w2v,
                         [i[idx] for i in response_text],
                     )    # [batch, 300]
-                    r_embd.append(response_embd)
+                    r_embd.append(torch.tensor(response_embd))
                 r_embd = torch.stack(r_embd).mean(dim=0).cuda()    # [300]
                 
                 max_size = max(len(r), self.args['tgt_len_size'])

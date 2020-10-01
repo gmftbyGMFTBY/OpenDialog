@@ -89,4 +89,5 @@ class MultiViewTestAgent(RetrievalBaseAgent):
 
 if __name__ == "__main__":
     agent = TestAgent()
-    data = agent.MultiSearch(['公主岭'])
+    print(agent.talk(None, '你今天可真勇猛啊 [SEP] 哈哈哈，哥哥来保护你 [SEP] 妹妹今天可娇弱了 [SEP] 你算个屁'))
+    # data = agent.MultiSearch(['公主岭'])

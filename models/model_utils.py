@@ -205,7 +205,7 @@ class ESUtils:
 class ESChat:
 
     def __init__(self, index_name, kb=True):
-        self.es = Elasticsearch()
+        self.es = Elasticsearch(http_auth=('xxx', 'xxx'))
         self.index = index_name
         # if kb:
         #     self.kwparser = KBKWParser()
