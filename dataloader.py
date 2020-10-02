@@ -1602,9 +1602,9 @@ class GPT2V2Dataset(Dataset):
             ids = torch.LongTensor(batch[0]['ids'])
             rids = torch.LongTensor(batch[0]['rids'])
             ctx_text = batch[0]['context_text']
-            candidate_text = bathc[0]['response_text']
+            candidate_text = batch[0]['response_text']
             if torch.cuda.is_available():
-                ids = ctx.cuda()
+                ids = ids.cuda()
             return ids, rids, ctx_text, candidate_text
 
 # ========== PONE ========== #

@@ -42,7 +42,7 @@ class GPT2V2(nn.Module):
     def predict(self, inpt_ids, context_embd, response_embd, max_len):
         '''batch_size is 1; inpt_ids: [seq]; return a list of ids (generated)'''
         generated = [self.cls_id]
-        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=1)).unsqueeze(1).expand(-1, output.shape[1], -1)    # [32]
+        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=-1))    # [32]
         for _ in range(max_len):
             outputs = self.model(
                 input_ids=inpt_ids
@@ -134,11 +134,12 @@ class GPT2V2Agent(BaseAgent):
             lr=self.args['lr'], 
             correct_bias=True,
         )
-        self.model, self.optimizer = amp.initialize(
-            self.model, 
-            self.optimizer, 
-            opt_level=self.args['amp_level'],
-        )
+        if run_mode == 'train':
+            self.model, self.optimizer = amp.initialize(
+                self.model, 
+                self.optimizer, 
+                opt_level=self.args['amp_level'],
+            )
         self.warmup_scheduler = transformers.get_linear_schedule_with_warmup(
             self.optimizer,
             num_warmup_steps=self.args['warmup_steps'],
@@ -159,10 +160,10 @@ class GPT2V2Agent(BaseAgent):
             context_embd = convert_text_embedding(self.w2v, context_text)   # [batch, 300]
             context_embd = torch.tensor(context_embd).cuda()
             r_embd = []
-            for idx in range(len(response_text[0])):
+            for j in range(len(response_text[0])):
                 response_embd = convert_text_embedding(
                     self.w2v,
-                    [i[idx] for i in response_text],
+                    [i[j] for i in response_text],
                 )    # [batch, 300]
                 r_embd.append(torch.tensor(response_embd))
             r_embd = torch.stack(r_embd).mean(dim=0).cuda()    # [batch, 300]
@@ -170,12 +171,10 @@ class GPT2V2Agent(BaseAgent):
 
             logits = self.model(cid, context_embd, r_embd)    # [batch, seq, vocab]
             shift_logits = logits[..., :-1, :].contiguous()
-            try:
-                loss = self.criterion(
-                    shift_logits.view(-1, shift_logits.size(-1)),
-                    labels.view(-1))
-            except:
-                ipdb.set_trace()
+            loss = self.criterion(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                labels.view(-1),
+            )
             _, preds = shift_logits.max(dim=-1)    # [batch, seq]
             not_ignore = labels.ne(self.args['pad'])
             num_targets = not_ignore.long().sum().item()
@@ -208,34 +207,34 @@ class GPT2V2Agent(BaseAgent):
 
     @torch.no_grad()
     def test_model(self, test_iter, path):
-        '''Generate the test dataset and measure the performance'''
+        '''BATCH SIZE IS 1; Generate the test dataset and measure the performance'''
         def filter(x):
             return x.replace('[PAD]', '')
         self.model.eval()
         pbar = tqdm(test_iter)
         with open(path, 'w') as f:
             for batch in pbar:
-                cid, labels, context_text, response_text = batch
-                context_embd = convert_text_embedding(self.w2v, context_text)
-                context_embd = torch.tensor(context_embd).cuda()
+                cid, rid, context_text, response_text = batch
+                context_embd = convert_text_embedding(self.w2v, [context_text])[0]
+                context_embd = torch.tensor(context_embd, dtype=torch.float).cuda()
                 r_embd = []
-                for idx in range(len(response_text[0])):
+                for idx in range(len(response_text)):
                     response_embd = convert_text_embedding(
                         self.w2v,
-                        [i[idx] for i in response_text],
-                    )    # [batch, 300]
-                    r_embd.append(torch.tensor(response_embd))
+                        [response_text[idx]],
+                    )[0]    # [300]
+                    r_embd.append(torch.tensor(response_embd, dtype=torch.float))
                 r_embd = torch.stack(r_embd).mean(dim=0).cuda()    # [300]
                 
-                max_size = max(len(r), self.args['tgt_len_size'])
-                tgt = self.model.predict(c, context_embd, r_embd, max_size)
+                max_size = max(len(rid), self.args['tgt_len_size'])
+                tgt = self.model.predict(cid, context_embd, r_embd, max_size)
                 text = self.vocab.convert_ids_to_tokens(tgt)
                 tgt = ''.join(text)
 
-                ctx = self.vocab.convert_ids_to_tokens(c)
+                ctx = self.vocab.convert_ids_to_tokens(cid)
                 ctx = filter(''.join(ctx))
 
-                ref = self.vocab.convert_ids_to_tokens(r)
+                ref = self.vocab.convert_ids_to_tokens(rid)
                 ref = filter(''.join(ref))
 
                 f.write(f'CTX: {ctx}\n')

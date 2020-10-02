@@ -170,7 +170,7 @@ class KBKWParser(KWParser):
 class ESUtils:
 
     def __init__(self, index_name, create_index=False):
-        self.es = Elasticsearch()
+        self.es = Elasticsearch(http_auth=('XXX', 'XXX'))
         self.index = index_name
         if create_index:
             mapping = {
@@ -178,7 +178,7 @@ class ESUtils:
                     'context': {
                         'type': 'text',
                         'analyzer': 'ik_max_word',
-                        'search_analyzer': 'ik_max_word'
+                        'search_analyzer': 'ik_smart'
                     }
                 }
             }

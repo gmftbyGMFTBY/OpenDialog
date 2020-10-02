@@ -154,11 +154,12 @@ class GPT2Agent(BaseAgent):
             lr=self.args['lr'], 
             correct_bias=True,
         )
-        self.model, self.optimizer = amp.initialize(
-            self.model, 
-            self.optimizer, 
-            opt_level=self.args['amp_level'],
-        )
+        if run_mode == 'train':
+            self.model, self.optimizer = amp.initialize(
+                self.model, 
+                self.optimizer, 
+                opt_level=self.args['amp_level'],
+            )
 
         # need to obtain the whole iter
         self.warmup_scheduler = transformers.get_linear_schedule_with_warmup(

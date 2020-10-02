@@ -45,4 +45,8 @@ import sys
 sys.path.append('..')
 from metrics import *
 from eval import *
-from utils.embedding import *
+try:
+    from utils.embedding import *
+except:
+    print(f'[!] load utils.embedding failed')
+    pass

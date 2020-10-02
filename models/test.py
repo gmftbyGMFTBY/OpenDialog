@@ -8,7 +8,7 @@ class TestAgent(BaseAgent):
 
     def __init__(self, kb=True):
         super(TestAgent, self).__init__()
-        self.model = ESChat('retrieval_database', kb=kb)
+        self.model = ESChat('zh50w_database', kb=kb)
 
     def talk(self, topic, msgs):
         return self.model.talk(topic, msgs) 
