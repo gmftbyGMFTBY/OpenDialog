@@ -1,5 +1,65 @@
 from .header import *
 
+# ========== utils for GPT2V2RL and GPT2V2 ==========
+class Memory:
+    def __init__(self):
+        self.actions = []
+        self.states = []
+        self.logprobs = []
+        self.rewards = []
+    
+    def clear_memory(self):
+        del self.actions[:]
+        del self.states[:]
+        del self.logprobs[:]
+        del self.rewards[:]
+        
+class ActorCritic(nn.Module):
+    
+    def __init__(self, policy_size, embedding_size, action_std=0.5):
+        super(ActorCritic, self).__init__()
+        self.actor = nn.Sequential(
+            nn.Linear(embedding_size*2, embedding_size),
+            nn.Tanh(),
+            nn.Linear(embedding_size, policy_size),
+            nn.Tanh(),
+        )
+        self.critic = nn.Sequential(
+            nn.Linear(embedding_size*2, embedding_size),
+            nn.Tanh(),
+            nn.Linear(embedding_size, 1),
+        )
+        self.action_var = torch.full((action_dim,), action_std*action_std)
+        if torch.cuda.is_available():
+            self.action_var = self.action_var.cuda()
+            
+    def forward(self, embedding):
+        '''only called by gpt2v2, compatible with gpt2v2 model; only the actor is used and critic is ignored;
+        :embedding: [B, E*2]'''
+        return self.actor(embedding)    # [B, Policy_size]
+    
+    def act(self, state, memory):
+        action_mean = self.actor(state)
+        cov_mat = torch.diag(self.action_var)
+        dist = MultivariateNormal(action_mean, cov_mat)
+        action = dist.sample()
+        action_logprob = dist.log_prob(action)
+        memory.states.append(state)
+        memory.actions.append(action)
+        memory.logprobs.append(action_logprob)
+        return action.detach()
+    
+    def evaluate(self, state, action):   
+        action_mean = self.actor(state)
+        action_var = self.action_var.expand_as(action_mean)
+        cov_mat = torch.diag_embed(action_var).to(device)
+        dist = MultivariateNormal(action_mean, cov_mat)
+        action_logprobs = dist.log_prob(action)
+        dist_entropy = dist.entropy()
+        state_value = self.critic(state)
+        return action_logprobs, torch.squeeze(state_value), dist_entropy
+# =========== utils for GPT2V2RL and GPT2V2 ==========
+
 class ReplayMemory:
 
     '''
@@ -465,8 +525,9 @@ def to_cuda(x, model=False):
             x.cuda()
             return None
         else:
-            x = x.cuda()
-            return x
+            return x.cuda()
+    else:
+        return x
 
 # ========= BalancedDataParallel ========= #
 def scatter(inputs, target_gpus, chunk_sizes, dim=0):

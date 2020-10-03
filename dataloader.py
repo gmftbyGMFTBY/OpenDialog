@@ -316,11 +316,24 @@ class GPT2Dataset(Dataset):
                 ctx = ctx.cuda()
             return ctx
         else:
-            assert len(batch) == 1, f'[!] batch must be 1, but got {len(batch)}'
-            ctx, res = torch.LongTensor(batch[0]['context_id']), torch.LongTensor(batch[0]['reply_id'])
+            # assert len(batch) == 1, f'[!] batch must be 1, but got {len(batch)}'
+            # ctx, res = torch.LongTensor(batch[0]['context_id']), torch.LongTensor(batch[0]['reply_id'])
+            # if torch.cuda.is_available():
+            #     ctx, res = ctx.cuda(), res.cuda()
+            # return ctx, res
+            
+            # NOTE: BATCH VERSION, PAD IN THE FIRST; seems better
+            max_len = max([len(i['context_id']) for i in batch])
+            ctx = torch.LongTensor([[self.pad_id] * (max_len - len(i['context_id'])) + i['context_id'] for i in batch])
+            attn_mask_index = ctx.nonzero().tolist()
+            attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+            attn_mask = ctx.clone()
+            attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+            res = [i['reply_id'] for i in batch]
             if torch.cuda.is_available():
-                ctx, res = ctx.cuda(), res.cuda()
-            return ctx, res
+                ctx = ctx.cuda()
+                attn_mask = attn_mask.cuda()
+            return ctx, attn_mask, res
 
 class MultiGPT2Dataset(Dataset):
 

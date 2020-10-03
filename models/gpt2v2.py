@@ -4,10 +4,12 @@ class GPT2V2(nn.Module):
 
     def __init__(self, vocab_size, unk_id, sep_id, cls_id, topk, topp, 
                  repetition_penalty,
-                 config_path='data/config/model_config_dialogue_small.json', embedding_size=300, policy_size=32):
+                 config_path='data/config/model_config_dialogue_small.json', 
+                 embedding_size=300, policy_size=32):
         super(GPT2V2, self).__init__()
         self.model_config = GPT2Config.from_json_file(config_path)
         self.model = GPT2Model(config=self.model_config)
+        
         self.model.resize_token_embeddings(vocab_size)
         self.n_ctx = self.model.config.to_dict().get('n_ctx')
         self.n_embd = self.model.config.to_dict().get('n_embd')
@@ -17,14 +19,7 @@ class GPT2V2(nn.Module):
         self.cls_id = cls_id
         self.repetition_penalty = repetition_penalty
         
-        # policy agent
-        self.agent = nn.Sequential(
-            nn.Linear(embedding_size*2, embedding_size),
-            nn.Tanh(),
-            nn.Linear(embedding_size, policy_size),
-            nn.Tanh(),
-        )
-        
+        self.agent = ActorCritic(policy_size, embedding_size)
         self.proj = nn.Linear(self.n_embd + policy_size, vocab_size)
 
     def forward(self, inpt_ids, context_embd, response_embd):

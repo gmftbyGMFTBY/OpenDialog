@@ -30,8 +30,7 @@ class GPT2(nn.Module):
 
     @torch.no_grad()
     def predict(self, inpt_ids, max_len):
-        '''
-        batch_size is 1; inpt_ids: [seq]; return a list of ids (generated)'''
+        '''batch_size is 1; inpt_ids: [seq]; return a list of ids (generated)'''
         generated = [self.cls_id]
         for _ in range(max_len):
             outputs = self.model(
@@ -56,18 +55,16 @@ class GPT2(nn.Module):
         return generated
 
     @torch.no_grad()
-    def predict_batch(self, inpt_ids, max_len):
-        '''
-        inpt_ids: [batch, seq]
-        return: samples*[batch]
+    def predict_batch(self, inpt_ids, attn_mask, max_len):
+        '''inpt_ids: [batch, seq]; return: samples*[batch]
         '''
         # change inpt_ids from [seq] to [batch, seq]
-        generated = []
-        prev, past = inpt_ids, None
         batch_size = inpt_ids.shape[0]
+        generated = [[self.cls_id] * batch_size]
+        prev, past = inpt_ids, None
         stop_flag = np.zeros(batch_size)    # [batch]
         for _ in range(max_len):
-            outputs = self.model(input_ids=prev, past=past)    # [batch, seq, vocab]
+            outputs = self.model(input_ids=prev, attention_mask=attn_mask, past=past)    # [batch, seq, vocab]
             output, past = outputs[:2]
             next_token_logits = output[:, -1, :]    # [batch, vocab]
             next_token_logits[:, self.unk_id] = -np.inf
@@ -76,12 +73,14 @@ class GPT2(nn.Module):
                 y = [item[x] for item in generated]
                 next_token_logits[x, y] /= self.repetition_penalty
             filtered_logits = top_k_top_p_filtering_batch(
-                    next_token_logits, 
-                    top_k=self.topk, 
-                    top_p=self.topp)
+                next_token_logits, 
+                top_k=self.topk, 
+                top_p=self.topp,
+            )
             next_token = torch.multinomial(
-                    F.softmax(filtered_logits, dim=-1),
-                    num_samples=1)    # [batch, 1]
+                F.softmax(filtered_logits, dim=-1),
+                num_samples=1,
+            )    # [batch, 1]
             # set up stop_flag
             for idx, i in enumerate(next_token.squeeze(1)):
                 if i == self.sep_id:
@@ -90,6 +89,7 @@ class GPT2(nn.Module):
             prev = next_token
             if sum(stop_flag) == batch_size:
                 break
+            attn_mask = torch.cat([attn_mask, torch.tensor([1] * batch_size).unsqueeze(1).cuda()], dim=1)
         # transpose
         ng, batch_size = [], len(generated[0])
         for i in range(batch_size):
@@ -151,7 +151,7 @@ class GPT2Agent(BaseAgent):
             self.model.cuda()
         self.optimizer = transformers.AdamW(
             self.model.parameters(), 
-            lr=self.args['lr'], 
+            lr=self.args['lr'],
             correct_bias=True,
         )
         if run_mode == 'train':
@@ -260,7 +260,7 @@ class GPT2Agent(BaseAgent):
         print(f'[!] translate test dataset over, write into {path}')
 
     @torch.no_grad()
-    def test_model(self, test_iter, path):
+    def test_model_one_instance(self, test_iter, path):
         '''Generate the test dataset and measure the performance'''
         def filter(x):
             return x.replace('[PAD]', '')
@@ -283,6 +283,40 @@ class GPT2Agent(BaseAgent):
                 f.write(f'CTX: {ctx}\n')
                 f.write(f'REF: {ref}\n')
                 f.write(f'TGT: {tgt}\n\n')
+        print(f'[!] translate test dataset over, write into {path}')
+        # measure the performance
+        (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])
+        print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Length(max, min, avg): {c_max_l}/{c_min_l}/{c_avg_l}|{r_max_l}/{r_min_l}/{r_avg_l}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
+        
+    @torch.no_grad()
+    def test_model(self, test_iter, path):
+        '''Generate the test dataset and measure the performance'''
+        def filter_tgt(x):
+            if '[SEP]' in x:
+                x = x[:x.index('[SEP]')] + '[SEP]'
+            return x
+        def filter(x):
+            return x.replace('[PAD]', '')
+        self.model.eval()
+        pbar = tqdm(test_iter)
+        with open(path, 'w') as f:
+            for batch in pbar:
+                c, attn_mask, r = batch
+                max_size = min(len(r), self.args['tgt_len_size'])
+                tgt = self.model.predict_batch(c, attn_mask, max_size)
+                for tgt_, c_, r_ in zip(tgt, c, r):
+                    text = self.vocab.convert_ids_to_tokens(tgt_)
+                    tgt = filter_tgt(''.join(text))
+
+                    ctx = self.vocab.convert_ids_to_tokens(c_)
+                    ctx = filter(''.join(ctx))
+
+                    ref = self.vocab.convert_ids_to_tokens(r_)
+                    ref = filter(''.join(ref))
+
+                    f.write(f'CTX: {ctx}\n')
+                    f.write(f'REF: {ref}\n')
+                    f.write(f'TGT: {tgt}\n\n')
         print(f'[!] translate test dataset over, write into {path}')
         # measure the performance
         (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])

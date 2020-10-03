@@ -68,7 +68,7 @@ elif [ $mode = 'train' ]; then
         --multi_gpu $cuda \
         --lang $lang
 elif [ $mode = 'test' ]; then
-    one_batch_model=(kwgpt2 pfgpt2 gpt2gan lccc gpt2 gpt2v2 multigpt2 when2talk)
+    one_batch_model=(kwgpt2 pfgpt2 gpt2gan lccc gpt2v2 multigpt2 when2talk)
     if [[ ${one_batch_model[@]} =~ $model ]]; then
         batch_size=1
     else
@@ -88,7 +88,7 @@ elif [ $mode = 'test' ]; then
         --mode test \
         --n_vocab 70000 \
         --batch_size $batch_size \
-        --src_len_size 300 \
+        --src_len_size 256 \
         --tgt_len_size 50 \
         --seed 30 \
         --multi_gpu $cuda \
