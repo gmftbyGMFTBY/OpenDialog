@@ -322,7 +322,7 @@ class GPT2Dataset(Dataset):
             #     ctx, res = ctx.cuda(), res.cuda()
             # return ctx, res
             
-            # NOTE: BATCH VERSION, PAD IN THE FIRST; seems better
+            # NOTE: BATCH VERSION, PAD IN THE FIRST;
             max_len = max([len(i['context_id']) for i in batch])
             ctx = torch.LongTensor([[self.pad_id] * (max_len - len(i['context_id'])) + i['context_id'] for i in batch])
             attn_mask_index = ctx.nonzero().tolist()
@@ -822,6 +822,89 @@ class BERTMCDataset(Dataset):
         with open(self.pp_path, 'wb') as f:
             pickle.dump(self.data, f)
         print(f'[!] save dataset into {self.pp_path}')
+        
+class BERTIRBIDataset(Dataset):
+    
+    def __init__(self, path, mode='train', max_len=300, samples=9):
+        self.mode = mode
+        self.max_len = max_len
+        data = read_text_data(path)
+        responses = [i[1] for i in data]
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
+        self.pp_path = f'{os.path.splitext(path)[0]}_irbi.pt'
+        if os.path.exists(self.pp_path):
+            self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data = []
+        d_ = []
+        for item in tqdm(data):
+            context, response = item[0], item[1]
+            negative = generate_negative_samples(
+                response, responses, samples=samples
+            )
+            d_.append((context, [response] + negative))
+        if mode in ['train', 'dev']:
+            for context, response in tqdm(d_):
+                context_id = self.vocab.encode(context)
+                for idx, r in enumerate(response):
+                    bundle = dict()
+                    rid = self.vocab.encode(r)
+                    bundle['context_id'] = context_id[-max_len:]
+                    bundle['reply_id'] = rid[-max_len:]
+                    bundle['label'] = 1 if idx == 0 else 0
+                    self.data.append(bundle)
+        else:
+            for item in tqdm(d_):
+                context, response = item
+                context_id = self.vocab.encode(context)
+                res_ids = [self.vocab.encode(i)[-max_len:] for i in response]
+                bundle = dict()
+                bundle['context_id'] = context_id[-max_len:]
+                bundle['reply_id'] = res_ids
+                bundle['label'] = [1] + [0] * samples
+                self.data.append(bundle)
+                
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        if self.mode in ['train', 'dev']:
+            context_ids = torch.LongTensor(bundle['context_id'])
+            response_id = torch.LongTensor(bundle['reply_id'])
+        else:
+            context_ids = [torch.LongTensor(bunde['context_id'])] * len(bundle['reply_id'])
+            response_id = [torch.LongTensor(i) for i in bundle['reply_id']]
+        return context_ids, response_id, bundle['label'] 
+    
+    def save_pickle(self):
+        data = torch.save(self.data, self.pp_path)
+        print(f'[!] save dataset into {self.pp_path}')
+        
+    def collate(self, batch):
+        ctx, response, label = [], [], []
+        if self.mode == 'train':
+            for i in batch:
+                ctx.append(i[0])
+                response.append(i[1])
+                label.append(i[2])
+            ctx = pad_sequence(ctx, batch_first=True, padding_value=self.pad)    # [batch, seq]
+            res = pad_sequence(response, batch_first=True, padding_value=self.pad)    # [batch, seq]
+            label = torch.LongTensor(label)
+        else:
+            for i in batch:
+                ctx.extend(i[0])
+                response.extend(i[1])
+                label.extend(i[2])
+            ctx = pad_sequence(ctx, batch_first=True, padding_value=self.pad)    # [batch, seq]
+            res = pad_sequence(response, batch_first=True, padding_value=self.pad)    # [batch, seq]
+            label = torch.LongTensor(label)
+        
+        if torch.cuda.is_available():
+            ctx, res, label = ctx.cuda(), res.cuda(), label.cuda()
+        return ctx, res, label
 
 class BERTIRDataset(Dataset):
 
@@ -1495,12 +1578,85 @@ class GPT2LMDataset(Dataset):
 
     def __getitem__(self, i):
         return self.data[i]
+    
+class GPT2V2RLDataset(Dataset):
+    
+    def __init__(self, path, mode='train', min_length=20, lang='zh', src_len_size=512, tgt_len_size=128, candidate=5):
+        vocab_file = 'data/vocab/vocab_small' if lang == 'zh' else 'data/vocab/vocab_english'
+        self.mode = mode
+        
+        self.vocab = BertTokenizer(vocab_file=vocab_file)
+        self.pad_id = self.vocab.convert_tokens_to_ids('[PAD]')
+        self.cls_id = self.vocab.convert_tokens_to_ids('[CLS]')
+        self.sep_id = self.vocab.convert_tokens_to_ids('[SEP]')
+        
+        self.src_len_size, self.tgt_len_size, self.candidate = src_len_size, tgt_len_size, candidate
+        
+        # init the elasticsearch retrieval
+        self.retrieval = TestAgent(kb=False)
+        print(f'[!] elasticsearch retrieval module init over')
+        
+        self.pp_path = f'{os.path.splitext(path)[0]}_v2rl.pt'
+        if os.path.exists(self.pp_path):
+            self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        
+        data = read_text_data(path)
+        self.data = []
+        contexts = [i[0] for i in data]
+        responses = [i[1] for i in data]
+        index, query_batch_size, dataset_size = 0, 256, len(data)
+        for begin_index in tqdm(list(range(0, dataset_size, query_batch_size))):
+            inner_contexts = contexts[begin_index:begin_index+query_batch_size]
+            inner_responses = responses[begin_index:begin_index+query_batch_size]
+            # [query_batch_size, candidates] type is list
+            inner_candidates = self.retrieval.MultiSearch(inner_contexts, samples=self.candidate)
+            for ctx, res, can in list(zip(inner_contexts, inner_responses, inner_candidates)):
+                if len(can) < self.candidate:
+                    continue
+                bundle = dict()
+                ctx_tokens = self.vocab.encode(ctx)
+                res_tokens = self.vocab.encode(res)
+                if len(ctx_tokens) < min_length:
+                    continue
+                bundle['ids'] = ctx_tokens[-self.src_len_size:]
+                bundle['rids'] = res_tokens
+                bundle['context_text'] = ctx.replace('[SEP]', '')
+                bundle['response_text'] = can
+                self.data.append(bundle)
+        print(f'[!] read and process raw data from {path} over')
+        torch.save(self.data, self.pp_path)
+        print(f'[!] save dataset into {self.pp_path}')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+    
+    def collate(self, batch):
+        max_len = max([len(i['ids']) for i in batch])
+        ids = torch.LongTensor([[self.pad_id] * (max_len - len(i['ids'])) + i['ids'] for i in batch])
+        attn_mask_index = ids.nonzero().tolist()
+        attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+        attn_mask = ids.clone()
+        attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+        res = [i['rids'] for i in batch]
+        if torch.cuda.is_available():
+            ids = ids.cuda()
+            attn_mask = attn_mask.cuda()
+        ctx_text = [i['context_text'] for i in batch]
+        candidate_text = [i['response_text'] for i in batch]
+        rids = [torch.LongTensor(i['rids']) for i in batch]
+        return ids, rids, attn_mask, ctx_text, candidate_text
 
 class GPT2V2Dataset(Dataset):
     
-    '''retrieval some candidate for generation; the context tokens are masked; retrieval responses and the conversation context will be used as the semantic controllor'''
+    '''retrieval some candidate for generation; the context tokens are masked; retrieval responses and the conversation context will be used as the semantic controllor
+    Support parallel prediction by padding in front of the sequences inner a batch'''
 
-    def __init__(self, path, mode='train', min_length=20, lang='zh', src_len_size=512, tgt_len_size=128, candidate=2):
+    def __init__(self, path, mode='train', min_length=20, lang='zh', src_len_size=512, tgt_len_size=128, candidate=5):
         vocab_file = 'data/vocab/vocab_small' if lang == 'zh' else 'data/vocab/vocab_english'
         self.mode = mode
         
@@ -1535,6 +1691,8 @@ class GPT2V2Dataset(Dataset):
                 for ctx, res, can in list(zip(inner_contexts, inner_responses, inner_candidates)):
                     if len(can) < self.candidate:
                         continue
+                    # NOTE: faster for training?
+                    # can = [list(jieba.cut(i_can)) for i_can in can]
                     bundle = dict()
                     ctx_tokens = self.vocab.convert_tokens_to_ids(self.vocab.tokenize(ctx))
                     res_tokens = self.vocab.convert_tokens_to_ids(self.vocab.tokenize(res))
@@ -1611,14 +1769,30 @@ class GPT2V2Dataset(Dataset):
                 ids, labels = ids.cuda(), labels.cuda()
             return ids, labels, ctx_text, candidate_text
         else:
-            assert len(batch) == 1, f'[!] batch must be 1, but got {len(batch)}'
-            ids = torch.LongTensor(batch[0]['ids'])
-            rids = torch.LongTensor(batch[0]['rids'])
-            ctx_text = batch[0]['context_text']
-            candidate_text = batch[0]['response_text']
+            max_len = max([len(i['ids']) for i in batch])
+            ids = torch.LongTensor([[self.pad_id] * (max_len - len(i['ids'])) + i['ids'] for i in batch])
+            attn_mask_index = ids.nonzero().tolist()
+            attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+            attn_mask = ids.clone()
+            attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+            res = [i['rids'] for i in batch]
             if torch.cuda.is_available():
                 ids = ids.cuda()
-            return ids, rids, ctx_text, candidate_text
+                attn_mask = attn_mask.cuda()
+            ctx_text = [i['context_text'] for i in batch]
+            candidate_text = [i['response_text'] for i in batch]
+            rids = [torch.LongTensor(i['rids']) for i in batch]
+            return ids, rids, attn_mask, ctx_text, candidate_text
+        
+            # ========== BATCH SIZE IS 1 VERSION ==========
+            # assert len(batch) == 1, f'[!] batch must be 1, but got {len(batch)}'
+            # ids = torch.LongTensor(batch[0]['ids'])
+            # rids = torch.LongTensor(batch[0]['rids'])
+            # ctx_text = batch[0]['context_text']
+            # candidate_text = batch[0]['response_text']
+            # if torch.cuda.is_available():
+            #     ids = ids.cuda()
+            # return ids, rids, ctx_text, candidate_text
 
 # ========== PONE ========== #
 class PONEDataset(Dataset):
@@ -1936,13 +2110,6 @@ if __name__ == "__main__":
     # ========== BERTIRMulti ========== #
     # train_data = BERTIRMultiDataset('data/train_retrieval/train.txt')
     # train_iter = BERTIRMultiDataLoader(train_data)
-    # ========== Traditional IR ========= #
-    # train_data = IRDataset(
-    #         'data/zh50w/train.csv', 
-    #         'data/zh50w/train.pkl', 
-    #         mode='train', 
-    #         samples=9)
-    # train_iter = DataLoader(train_data, shuffle=True, batch_size=10, collate_fn=ir_collate_fn)
     # ========== GPT2Dataset ========== #
     # train_data = GPT2Dataset('./data/zh50w/train.txt', mode='train')
     # train_iter = DataLoader(train_data, batch_size=10, shuffle=False, collate_fn=gpt2_train_collate_fn)
@@ -1968,7 +2135,10 @@ if __name__ == "__main__":
     # train_data = Seq2SeqDataset('data/zh50w/train.txt', mode='train')
     # train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
     # ========== GPT2V2 ========== #
-    train_data = GPT2V2Dataset('./data/zh50w/train.txt', mode='train')
+    # train_data = GPT2V2Dataset('./data/zh50w/train.txt', mode='train')
+    # train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
+    # ========== BERTIRBI ========== #
+    train_data = BERTIRBIDataset('data/zh50w/train.txt', mode='train')
     train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
     # ========= ITERATE ========= # 
     for batch in tqdm(train_iter):

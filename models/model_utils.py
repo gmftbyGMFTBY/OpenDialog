@@ -29,7 +29,7 @@ class ActorCritic(nn.Module):
             nn.Tanh(),
             nn.Linear(embedding_size, 1),
         )
-        self.action_var = torch.full((action_dim,), action_std*action_std)
+        self.action_var = torch.full((policy_size,), action_std*action_std)
         if torch.cuda.is_available():
             self.action_var = self.action_var.cuda()
             
@@ -230,7 +230,7 @@ class KBKWParser(KWParser):
 class ESUtils:
 
     def __init__(self, index_name, create_index=False):
-        self.es = Elasticsearch(http_auth=('XXX', 'XXX'))
+        self.es = Elasticsearch(http_auth=('elastic', 'elastic123'))
         self.index = index_name
         if create_index:
             mapping = {
@@ -265,7 +265,7 @@ class ESUtils:
 class ESChat:
 
     def __init__(self, index_name, kb=True):
-        self.es = Elasticsearch(http_auth=('xxx', 'xxx'))
+        self.es = Elasticsearch(http_auth=('elastic', 'elastic123'))
         self.index = index_name
         # if kb:
         #     self.kwparser = KBKWParser()

@@ -137,7 +137,7 @@ def load_gpt2_dataset(args):
 def load_gpt2v2_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     if args['mode'] in ['train', 'dev']:
-        data = GPT2V2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'])
+        data = GPT2V2Dataset(path, mode=args['mode'], src_len_size=args['src_len_size'], tgt_len_size=args['tgt_len_size'], lang=args['lang'], candidate=5)
         args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
         train_sampler = torch.utils.data.distributed.DistributedSampler(data)
         iter_ = DataLoader(data, sampler=train_sampler, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
@@ -227,6 +227,21 @@ def load_bert_ir_cl_dataset(args):
     else:
         data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='overall')
         iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)
+    if not os.path.exists(data.pp_path):
+        data.save_pickle()
+    return iter_
+
+def load_bert_irbi_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    if args['mode'] in ['train', 'dev']:
+        data = BERTIRBIDataset(path, mode=args['mode'], samples=1, max_len=args['src_len_size'])
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+        iter_ = DataLoader(
+            data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate, 
+            sampler=train_sampler)
+    else:
+        data = BERTIRBIDataset(path, mode=args['mode'], samples=9, max_len=args['src_len_size'])
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=data.collate)
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     return iter_

@@ -32,10 +32,55 @@ class GPT2V2(nn.Module):
         output = torch.cat([output, policy_embd], dim=-1)    # [batch, seq, 768+32]
         output = self.proj(output)    # [batch, seq, vocab]
         return output
+    
+    @torch.no_grad()
+    def predict_batch(self, inpt_ids, attn_mask, context_embd, response_embd, max_len):
+        batch_size = inpt_ids.shape[0]
+        generated = [[self.cls_id] * batch_size]
+        prev, past = inpt_ids, None
+        stop_flag = np.zeros(batch_size)
+        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=-1))   # [batch, 32]
+        for _ in range(max_len):
+            outputs = self.model(
+                input_ids=prev,
+                attention_mask=attn_mask,
+                past=past
+            )
+            output, past = outputs[:2]
+            output = output[:, -1, :]    # [batch, 768]
+            output = torch.cat([output, policy_embd], dim=-1)    # [batch, 768+32]
+            next_token_logits = self.proj(output)    # [batch, vocab]
+            next_token_logits[:, self.unk_id] = -np.inf
+            # repetition penalty
+            for x in range(batch_size):
+                y = [item[x] for item in generated]
+                next_token_logits[x, y] /= self.repetition_penalty
+            filtered_logits = top_k_top_p_filtering_batch(
+                next_token_logits, 
+                top_k=self.topk, 
+                top_p=self.topp,
+            )
+            next_token = torch.multinomial(
+                F.softmax(filtered_logits, dim=-1),
+                num_samples=1,
+            )    # [batch, 1]
+            for idx, i in enumerate(next_token.squeeze(1)):
+                if i == self.sep_id:
+                    stop_flag[idx] = 1
+            generated.append([token.item() for token in next_token.squeeze(1)])
+            prev = next_token
+            if sum(stop_flag) == batch_size:
+                break
+            attn_mask = torch.cat([attn_mask, torch.tensor([1] * batch_size).unsqueeze(1).cuda()], dim=1)
+        # transpose
+        ng, batch_size = [], len(generated[0])
+        for i in range(batch_size):
+            ng.append([g[i] for g in generated])
+        return ng
 
     @torch.no_grad()
     def predict(self, inpt_ids, context_embd, response_embd, max_len):
-        '''batch_size is 1; inpt_ids: [seq]; return a list of ids (generated)'''
+        '''inpt_ids: [seq]; return a list of ids (generated)'''
         generated = [self.cls_id]
         policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=-1))    # [32]
         for _ in range(max_len):
@@ -67,7 +112,7 @@ class GPT2V2(nn.Module):
 
 class GPT2V2Agent(BaseAgent):
 
-    def __init__(self, total_steps, multi_gpu, vocab_file='data/vocab/vocab_small', run_mode='train', lang='zh', lm=False, local_rank=0):
+    def __init__(self, total_steps, multi_gpu, vocab_file='data/vocab/vocab_small', run_mode='train', lang='zh', local_rank=0):
         super(GPT2V2Agent, self).__init__()
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(','))))
@@ -78,17 +123,16 @@ class GPT2V2Agent(BaseAgent):
             'lr': 1.5e-4,
             'grad_clip': 1.0,
             'tgt_len_size': 30,
-            'lr_gamma': 0.5,
-            'warmup_steps': 8000,
+            'warmup_steps': 16000,
             'total_steps': total_steps,
             'topk': 2000,
-            'topp': 0.97, 
+            'topp': 0.98, 
             'config_path': 'data/config/model_config_dialogue_small.json',
             'multi_gpu': self.gpu_ids,
             'run_mode': run_mode,
             'vocab_file': vocab_file,
             'lang': lang,
-            'repetition_penalty': 1,
+            'repetition_penalty': 1.2,
             'amp_level': 'O2',
             'local_rank': local_rank,
             'policy_size': 32,
@@ -129,7 +173,7 @@ class GPT2V2Agent(BaseAgent):
             lr=self.args['lr'], 
             correct_bias=True,
         )
-        if run_mode == 'train':
+        if self.args['run_mode'] == 'train':
             self.model, self.optimizer = amp.initialize(
                 self.model, 
                 self.optimizer, 
@@ -141,7 +185,7 @@ class GPT2V2Agent(BaseAgent):
             num_training_steps=self.args['total_steps']
         )
         if self.args['run_mode'] == 'train':
-            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
+            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
 
         self.show_parameters(self.args)
 
@@ -202,39 +246,46 @@ class GPT2V2Agent(BaseAgent):
 
     @torch.no_grad()
     def test_model(self, test_iter, path):
-        '''BATCH SIZE IS 1; Generate the test dataset and measure the performance'''
+        '''Generate the test dataset and measure the performance'''
         def filter(x):
             return x.replace('[PAD]', '')
+        def filter_generation(x):
+            if '[SEP]' in x:
+                x = x[:x.index('[SEP]')] + '[SEP]'
+            return x
         self.model.eval()
         pbar = tqdm(test_iter)
         with open(path, 'w') as f:
             for batch in pbar:
-                cid, rid, context_text, response_text = batch
-                context_embd = convert_text_embedding(self.w2v, [context_text])[0]
+                cid, rid, attn_mask, context_text, response_text = batch
+                context_embd = convert_text_embedding(self.w2v, context_text)
                 context_embd = torch.tensor(context_embd, dtype=torch.float).cuda()
                 r_embd = []
-                for idx in range(len(response_text)):
+                for idx in range(len(response_text[0])):
                     response_embd = convert_text_embedding(
                         self.w2v,
-                        [response_text[idx]],
-                    )[0]    # [300]
+                        [i[idx] for i in response_text],
+                    )    # [batch, 300]
                     r_embd.append(torch.tensor(response_embd, dtype=torch.float))
                 r_embd = torch.stack(r_embd).mean(dim=0).cuda()    # [300]
                 
-                max_size = max(len(rid), self.args['tgt_len_size'])
-                tgt = self.model.predict(cid, context_embd, r_embd, max_size)
-                text = self.vocab.convert_ids_to_tokens(tgt)
-                tgt = ''.join(text)
+                max_size = min(len(rid), self.args['tgt_len_size'])
+                tgt = self.model.predict_batch(
+                    cid, attn_mask, context_embd, r_embd, max_size,
+                )
+                for tgt_, ctx, ref in zip(tgt, cid, rid):
+                    text = self.vocab.convert_ids_to_tokens(tgt_)
+                    text = filter_generation(''.join(text))
 
-                ctx = self.vocab.convert_ids_to_tokens(cid)
-                ctx = filter(''.join(ctx))
+                    ctx = self.vocab.convert_ids_to_tokens(ctx)
+                    ctx = filter(''.join(ctx))
 
-                ref = self.vocab.convert_ids_to_tokens(rid)
-                ref = filter(''.join(ref))
+                    ref = self.vocab.convert_ids_to_tokens(ref)
+                    ref = filter(''.join(ref))
 
-                f.write(f'CTX: {ctx}\n')
-                f.write(f'REF: {ref}\n')
-                f.write(f'TGT: {tgt}\n\n')
+                    f.write(f'CTX: {ctx}\n')
+                    f.write(f'REF: {ref}\n')
+                    f.write(f'TGT: {text}\n\n')
         print(f'[!] translate test dataset over, write into {path}')
         # measure the performance
         (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])

@@ -56,8 +56,7 @@ class GPT2(nn.Module):
 
     @torch.no_grad()
     def predict_batch(self, inpt_ids, attn_mask, max_len):
-        '''inpt_ids: [batch, seq]; return: samples*[batch]
-        '''
+        '''inpt_ids: [batch, seq]; return: samples'''
         # change inpt_ids from [seq] to [batch, seq]
         batch_size = inpt_ids.shape[0]
         generated = [[self.cls_id] * batch_size]
@@ -111,7 +110,7 @@ class GPT2Agent(BaseAgent):
             'grad_clip': 1.0,
             'tgt_len_size': 30,
             'lr_gamma': 0.5,
-            'warmup_steps': 8000,
+            'warmup_steps': 16000,
             'total_steps': total_steps,
             'topk': 2000,
             'topp': 0.97, 
@@ -124,16 +123,12 @@ class GPT2Agent(BaseAgent):
             'amp_level': 'O2',
             'local_rank': local_rank,
         }
-        # hyperparameters
-        
-        # self.vocab = BertTokenizer.from_pretrained('/home/lt/data/GPT2_LCCC_base/')
         self.vocab = BertTokenizer(vocab_file=self.args['vocab_file'])
         self.vocab_size = len(self.vocab)
         self.unk = self.vocab.convert_tokens_to_ids('[UNK]')
         self.sep = self.vocab.convert_tokens_to_ids('[SEP]')
         self.cls = self.vocab.convert_tokens_to_ids('[CLS]')
         self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
-        self.args['pad'] = self.pad
 
         self.model = GPT2(
             self.vocab_size, 
@@ -146,7 +141,7 @@ class GPT2Agent(BaseAgent):
             config_path=self.args['config_path'],
         )
         
-        self.criterion = nn.CrossEntropyLoss(ignore_index=self.args['pad'], reduction='sum')
+        self.criterion = nn.CrossEntropyLoss(ignore_index=self.pad, reduction='sum')
         if torch.cuda.is_available():
             self.model.cuda()
         self.optimizer = transformers.AdamW(
@@ -196,7 +191,7 @@ class GPT2Agent(BaseAgent):
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1))
             _, preds = shift_logits.max(dim=-1)    # [batch, seq]
-            not_ignore = shift_labels.ne(self.args['pad'])
+            not_ignore = shift_labels.ne(self.pad)
             num_targets = not_ignore.long().sum().item()
             correct = (shift_labels == preds) & not_ignore
             correct = correct.float().sum()
@@ -306,7 +301,7 @@ class GPT2Agent(BaseAgent):
                 tgt = self.model.predict_batch(c, attn_mask, max_size)
                 for tgt_, c_, r_ in zip(tgt, c, r):
                     text = self.vocab.convert_ids_to_tokens(tgt_)
-                    tgt = filter_tgt(''.join(text))
+                    text = filter_tgt(''.join(text))
 
                     ctx = self.vocab.convert_ids_to_tokens(c_)
                     ctx = filter(''.join(ctx))
@@ -316,7 +311,7 @@ class GPT2Agent(BaseAgent):
 
                     f.write(f'CTX: {ctx}\n')
                     f.write(f'REF: {ref}\n')
-                    f.write(f'TGT: {tgt}\n\n')
+                    f.write(f'TGT: {text}\n\n')
         print(f'[!] translate test dataset over, write into {path}')
         # measure the performance
         (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])

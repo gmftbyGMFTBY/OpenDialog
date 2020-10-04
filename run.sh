@@ -10,7 +10,7 @@ model=$3
 cuda=$4 
 
 if [ $mode = 'init' ]; then
-    models=(seq2seq transformer bert_na uni lccc lcccir bertmcf bertmc DualLSTM pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 gpt2v2 bertretrieval_multiview bertretrieval_cl bertretrieval bertretrieval_dis bertlogic gpt2gan gpt2lm)
+    models=(seq2seq transformer bert_na bertirbi uni lccc lcccir bertmcf bertmc DualLSTM pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 gpt2v2 bertretrieval_multiview bertretrieval_cl bertretrieval bertretrieval_dis bertlogic gpt2gan gpt2lm)
     datasets=(qingyun LCCC STC douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
     mkdir bak ckpt rest
     for m in ${models[@]}
@@ -55,20 +55,20 @@ elif [ $mode = 'train' ]; then
     fi
     
     gpu_ids=(${cuda//,/ })
-    CUDA_VISIBLE_DEVICES=$cuda python -m torch.distributed.launch --nproc_per_node=${#gpu_ids[@]} main.py \
+    CUDA_VISIBLE_DEVICES=$cuda python -m torch.distributed.launch --nproc_per_node=${#gpu_ids[@]} --master_addr 127.0.0.2 --master_port 29501 main.py \
         --dataset $dataset \
         --model $model \
         --mode train \
         --batch_size 32 \
         --n_vocab 80000 \
-        --epoch 30 \
+        --epoch 60 \
         --seed 50 \
         --src_len_size 256 \
         --tgt_len_size 20 \
         --multi_gpu $cuda \
         --lang $lang
 elif [ $mode = 'test' ]; then
-    one_batch_model=(kwgpt2 pfgpt2 gpt2gan lccc gpt2v2 multigpt2 when2talk)
+    one_batch_model=(kwgpt2 pfgpt2 gpt2gan lccc multigpt2 when2talk)
     if [[ ${one_batch_model[@]} =~ $model ]]; then
         batch_size=1
     else

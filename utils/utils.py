@@ -53,6 +53,8 @@ def collect_parameter_4_model(args):
         return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank']}
     elif args['model'] == 'bert_na':
         return (args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang']}
+    elif args['model'] == 'bertirbi':
+        return (args['multi_gpu']), {'run_mode': args['mode'], 'local_rank': args['local_rank']}
     elif args['model'] == 'transformer':
         return (args['total_steps'], args['multi_gpu']), {'run_mode': args['mode'], 'lang': args['lang'], 'local_rank': args['local_rank'], 'vocab': args['vocab']}
     else:

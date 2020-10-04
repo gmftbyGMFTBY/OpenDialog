@@ -68,6 +68,8 @@ def load_dataset(args):
         return load_bert_ir_dis_dataset(args)
     elif args['model'] == 'bertnli':
         return load_bert_nli_dataset(args)
+    elif args['model'] == 'bertirbi':
+        return load_bert_irbi_dataset(args)
     elif args['model'] == 'bertlogic':
         return load_bert_logic_dataset(args)
     elif args['model'] == 'uni':
@@ -107,6 +109,7 @@ def main(**args):
         'lcccir': LCCCIRAgent,
         'uni': UNIAgent,
         'bert_na': BERTNAAgent,
+        'bertirbi': BERTBiEncoderAgent,
         'transformer': TransformerAgent,
     }
 

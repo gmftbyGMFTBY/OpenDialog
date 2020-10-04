@@ -36,6 +36,7 @@
     * 兼容性: 训练bert nli模型判断逻辑是否存在错误
     * 一致性: 检索模型(Learning-based metric)判断是否和上下文语义一致
 6. 生成式一次生成多个句子，统一进行重排序
+7. 训练 GPT2 模型，用60 epoch和32 batch size挺好的，并且GPT2V2比GPT2好很多
 
 ## 评价指标
 

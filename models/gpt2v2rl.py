@@ -6,7 +6,8 @@ class GPT2V2RL(nn.Module):
     def __init__(self, vocab_size, unk_id, sep_id, cls_id, topk, topp, 
                  repetition_penalty,
                  config_path='data/config/model_config_dialogue_small.json', 
-                 embedding_size=300, policy_size=32, action_std=0.5, k_epoch=10, eps_clip=0.2):
+                 embedding_size=300, policy_size=32, action_std=0.5, k_epoch=10, 
+                 eps_clip=0.2):
         super(GPT2V2RL, self).__init__()
         self.model_config = GPT2Config.from_json_file(config_path)
         self.model = GPT2Model(config=self.model_config)
@@ -22,7 +23,6 @@ class GPT2V2RL(nn.Module):
         self.repetition_penalty = repetition_penalty
         
         self.agent = ActorCritic(policy_size, embedding_size, action_std=action_std)
-        
         self.proj = nn.Linear(self.n_embd + policy_size, vocab_size)
         
     def _build_old_agent(self):
@@ -31,8 +31,7 @@ class GPT2V2RL(nn.Module):
         self.agent_old.load_state_dict(self.agent.state_dict())
         
     def select_action(self, state, memory):
-        '''state from the pre-trained word embeddings, return the sampled old policy network action;
-        Then save the action and corresponding information into memory'''
+        '''state from the pre-trained word embeddings, return the sampled old policy network action; Then save the action and corresponding information into memory'''
         return self.agent_old.act(state, memory).cpu().numpy().flatten()
     
     def update(self, memory, criterion, optimizer):
@@ -68,22 +67,30 @@ class GPT2V2RL(nn.Module):
         return np.mean(losses)
 
     @torch.no_grad()
-    def predict(self, inpt_ids, context_embd, response_embd, max_len):
-        '''batch_size is 1; inpt_ids: [seq]; return a list of ids (generated)'''
-        generated = [self.cls_id]
-        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=-1))    # [32]
+    def predict(self, inpt_ids, attn_mask, context_embd, response_embd, max_len):
+        '''predict or prepare the fake samples for adversarial learning; return a batch of samples'''
+        batch_size = inpt_ids.shape[0]
+        generated = [[self.cls_id] * batch_size]
+        prev, past = inpt_ids, None
+        stop_flag = np.zeros(batch_size)
+        # use old policy or policy?
+        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=-1))   # [batch, 32]
         for _ in range(max_len):
             outputs = self.model(
-                input_ids=inpt_ids
+                input_ids=prev,
+                attention_mask=attn_mask,
+                past=past
             )
-            output = outputs[0][-1, :]    # [768]
-            output = torch.cat([output, policy_embd], dim=-1)    # [768+32]
-            next_token_logits = self.proj(output)    # [vocab]
-            # next_token_logits = outputs[0][-1, :]    # [V]
-            next_token_logits[self.unk_id] = -np.inf
-            if generated:
-                next_token_logits[list(set(generated))] /= self.repetition_penalty
-            filtered_logits = top_k_top_p_filtering(
+            output, past = outputs[:2]
+            output = output[:, -1, :]    # [batch, 768]
+            output = torch.cat([output, policy_embd], dim=-1)    # [batch, 768+32]
+            next_token_logits = self.proj(output)    # [batch, vocab]
+            next_token_logits[:, self.unk_id] = -np.inf
+            # repetition penalty
+            for x in range(batch_size):
+                y = [item[x] for item in generated]
+                next_token_logits[x, y] /= self.repetition_penalty
+            filtered_logits = top_k_top_p_filtering_batch(
                 next_token_logits, 
                 top_k=self.topk, 
                 top_p=self.topp,
@@ -91,17 +98,25 @@ class GPT2V2RL(nn.Module):
             next_token = torch.multinomial(
                 F.softmax(filtered_logits, dim=-1),
                 num_samples=1,
-            )
-            generated.append(next_token.item())
-            if next_token == self.sep_id:
+            )    # [batch, 1]
+            for idx, i in enumerate(next_token.squeeze(1)):
+                if i == self.sep_id:
+                    stop_flag[idx] = 1
+            generated.append([token.item() for token in next_token.squeeze(1)])
+            prev = next_token
+            if sum(stop_flag) == batch_size:
                 break
-            inpt_ids = torch.cat((inpt_ids, next_token), dim=0)
-            inpt_ids = inpt_ids[-self.n_ctx:]
-        return generated
-    
-    @torch.no_grad()
-    def prepare_fake_samples(self, inpt_ids, context_embd, response_embd, max_len):
-        pass
+            attn_mask = torch.cat([attn_mask, torch.tensor([1] * batch_size).unsqueeze(1).cuda()], dim=1)
+        # only collect the tokens before the [SEP]; [CLS] X X X X X X [SEP]
+        ng, batch_size = [], len(generated[0])
+        for i in range(batch_size):
+            p = []
+            for g in generated:
+                p.append(g[i])
+                if g[i] == '[SEP]':
+                    break
+            ng.append(p)
+        return ng
     
     def forward(self):
         pass
@@ -221,6 +236,7 @@ class GPT2V2RLAgent(BaseAgent):
                 
     
     def train_generator(self, train_iter, mode='train', recoder=None, idx_=0, g_step_idx=0):
+        '''train generator(polilcy head parameters) by policy gradient'''
         self.generator.train()
         pass
         
