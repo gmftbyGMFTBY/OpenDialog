@@ -49,15 +49,19 @@ class BERTBIEncoder(nn.Module):
             self.can_encoder = BertEmbedding(squeeze_strategy='first')
         self.share = share
         
-    def forward(self, cid, rid, cid_mask, rid_mask, loss=True):
-        batch_size = cid.shape[0]
-        assert batch_size > 1, f'[!] batch size must bigger than 1, cause other elements in the batch will be seen as the negative samples'
+    def _encode(ids, rid, cid_mask, rid_mask):
         if self.share:
             cid_rep = self.encoder(cid, cid_mask)
             rid_rep = self.encoder(rid, rid_mask)
         else:
             cid_rep = self.ctx_encoder(cid, cid_mask)
             rid_rep = self.can_encoder(rid, rid_mask)
+        return cid_rep, rid_rep
+        
+    def forward(self, cid, rid, cid_mask, rid_mask, loss=True):
+        batch_size = cid.shape[0]
+        assert batch_size > 1, f'[!] batch size must bigger than 1, cause other elements in the batch will be seen as the negative samples'
+        cid_rep, rid_rep = self._encode(cid, rid, cid_mask, rid_mask)
         # cid_rep/rid_rep: [B, 768]
         dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B, B]
         # use half for supporting the apex
@@ -68,6 +72,14 @@ class BERTBIEncoder(nn.Module):
             return loss
         else:
             return dot_product
+        
+    def predict(self, cid, rid, cid_mask, rid_mask):
+        '''cid: [1, S]; rid: [B, S]'''
+        cid_rep, rid_rep = self._encode(cid, rid, cid_mask, rid_mask)
+        # cid_rep: [768] -> [1, 768]; rid_rep: [B, 768]
+        dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B]
+        dot_product = F.softmax(dot_product)
+        return dot_product
     
 class BERTBiEncoderAgent(RetrievalBaseAgent):
     
@@ -146,8 +158,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             cid, rid, cid_mask, rid_mask = batch
             batch_size = len(rid)
             assert batch_size == self.args['samples'], f'samples attribute must be the same as the batch size'
-            dot_product = self.model(cid, rid, cid_mask, rid_mask, loss=False)
-            dot_product = F.softmax(dot_product.squeeze(0), dim=-1)    # [B]
+            dot_product = self.predict(cid, rid, cid_msak, rid_mask)
             
             preds = dot_product.tolist()    # [10]
             preds = np.argsort(pred, axis=0)[::-1]
