@@ -11,7 +11,7 @@ from .gpt2gan_v2 import *
 from .bert_retrieval import *
 from .bert_retrieval_multi import *
 from .bert_nli import *
-from .bert_bi import *
+from .polyencoder import *
 from .test import *
 from .model_utils import *
 from .dialogpt import *

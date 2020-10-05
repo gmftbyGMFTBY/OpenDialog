@@ -825,11 +825,12 @@ class BERTMCDataset(Dataset):
         
 class BERTIRBIDataset(Dataset):
     
+    '''test mode batch size must be 1'''
+    
     def __init__(self, path, mode='train', max_len=300, samples=9):
         self.mode = mode
         self.max_len = max_len
         data = read_text_data(path)
-        responses = [i[1] for i in data]
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
         self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
         self.pp_path = f'{os.path.splitext(path)[0]}_irbi.pt'
@@ -838,33 +839,37 @@ class BERTIRBIDataset(Dataset):
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
         self.data = []
-        d_ = []
-        for item in tqdm(data):
-            context, response = item[0], item[1]
-            negative = generate_negative_samples(
-                response, responses, samples=samples
-            )
-            d_.append((context, [response] + negative))
         if mode in ['train', 'dev']:
+            d_ = [(context, response) for context, response in data]
             for context, response in tqdm(d_):
-                context_id = self.vocab.encode(context)
-                for idx, r in enumerate(response):
-                    bundle = dict()
-                    rid = self.vocab.encode(r)
-                    bundle['context_id'] = context_id[-max_len:]
-                    bundle['reply_id'] = rid[-max_len:]
-                    bundle['label'] = 1 if idx == 0 else 0
-                    self.data.append(bundle)
+                item = self.vocab.batch_encode_plus([context, response])
+                cid, cid_mask = item['input_ids'][0], item['attention_mask'][0]
+                rid, rid_mask = item['input_ids'][1], item['attention_mask'][1]
+                self.data.append({
+                    'cid': cid,
+                    'rid': rid,
+                    'cid_mask': cid_mask,
+                    'rid_mask': rid_mask,
+                })
         else:
-            for item in tqdm(d_):
-                context, response = item
-                context_id = self.vocab.encode(context)
-                res_ids = [self.vocab.encode(i)[-max_len:] for i in response]
-                bundle = dict()
-                bundle['context_id'] = context_id[-max_len:]
-                bundle['reply_id'] = res_ids
-                bundle['label'] = [1] + [0] * samples
-                self.data.append(bundle)
+            d_ = []
+            responses = [i[1] for i in data]
+            for i in tqdm(data):
+                context, response = i[0], i[1]
+                negative = generate_negative_samples(
+                    response, responses, samples=samples
+                )
+                d_.append((context, [response] + negative))
+            for context, response in tqdm(d_):
+                item = self.vocab.batch_encode_plus([context] + response)
+                cid, cid_mask = item['input_ids'][0], item['attention_mask'][0]
+                rids, rids_mask = item[input_ids][1:], item['attention_mask'][1:]
+                self.data.append({
+                    'cid': cid,
+                    'cid_mask': cid_mask,
+                    'rids': rids,
+                    'rids_mask': rids_mask,
+                })
                 
     def __len__(self):
         return len(self.data)
@@ -872,39 +877,44 @@ class BERTIRBIDataset(Dataset):
     def __getitem__(self, i):
         bundle = self.data[i]
         if self.mode in ['train', 'dev']:
-            context_ids = torch.LongTensor(bundle['context_id'])
-            response_id = torch.LongTensor(bundle['reply_id'])
+            cid = torch.LongTensor(bundle['cid'])
+            cid_mask = torch.LongTensor(bundle['cid_mask'])
+            rid = torch.LongTensor(bundle['rid'])
+            rid_mask = torch.LongTensor(bundle['rid_mask'])
         else:
-            context_ids = [torch.LongTensor(bunde['context_id'])] * len(bundle['reply_id'])
-            response_id = [torch.LongTensor(i) for i in bundle['reply_id']]
-        return context_ids, response_id, bundle['label'] 
+            cid = torch.LongTensor(bundle['cid'])
+            cid_mask = torch.LongTensor(bundle['cid_mask'])
+            rid = [torch.LongTensor(i) for i in bundle['rids']]
+            rid_mask = [torch.LongTensor(i) for i in bundle['rids_mask']]
+        return cid, rid, cid_mask, rid_mask 
     
     def save_pickle(self):
         data = torch.save(self.data, self.pp_path)
         print(f'[!] save dataset into {self.pp_path}')
         
     def collate(self, batch):
-        ctx, response, label = [], [], []
+        cid, cid_mask, rid, rid_mask = [], [], [], []
         if self.mode == 'train':
             for i in batch:
-                ctx.append(i[0])
-                response.append(i[1])
-                label.append(i[2])
-            ctx = pad_sequence(ctx, batch_first=True, padding_value=self.pad)    # [batch, seq]
-            res = pad_sequence(response, batch_first=True, padding_value=self.pad)    # [batch, seq]
-            label = torch.LongTensor(label)
+                cid.append(i[0])
+                rid.append(i[1])
+                cid_mask.append(i[2])
+                rid_mask.append(i[3])
+            cid = pad_sequence(cid, batch_first=True, padding_value=self.pad)
+            cid_mask = pad_sequence(cid_mask, batch_first=True, padding_value=0)
+            rid = pad_sequence(rid, batch_first=True, padding_value=self.pad)
+            rid_mask = pad_sequence(rid_mask, batch_first=True, padding_value=0)
         else:
-            for i in batch:
-                ctx.extend(i[0])
-                response.extend(i[1])
-                label.extend(i[2])
-            ctx = pad_sequence(ctx, batch_first=True, padding_value=self.pad)    # [batch, seq]
-            res = pad_sequence(response, batch_first=True, padding_value=self.pad)    # [batch, seq]
-            label = torch.LongTensor(label)
-        
+            assert len(batch) == 1, f'[!] test mode batch size must be 1'
+            batch = batch[0]
+            cid, rid, cid_mask, rid_mask = batch[0], batch[1], batch[2], batch[3]
+            cid = cid.unsqueeze(0)    # [1, S]
+            cid_mask = cid_mask.unsqueeze(0)    # [1, S]
+            rid = pad_sequence(rid, batch_first=True, padding_value=self.pad)
+            rid_mask = pad_sequence(rid, batch_first=True, padding_value=0)
         if torch.cuda.is_available():
-            ctx, res, label = ctx.cuda(), res.cuda(), label.cuda()
-        return ctx, res, label
+            cid, rid, cid_mask, rid_mask = cid.cuda(), rid.cuda(), cid_mask.cuda(), rid_mask.cuda()
+        return cid, rid, cid_mask, rid_mask
 
 class BERTIRDataset(Dataset):
 

@@ -1,39 +1,63 @@
 from .header import *
 
-'''Bert bi-encoder for binary classification'''
+'''PolyEncoder: https://arxiv.org/pdf/1905.01969v2.pdf
+1. Bi-encoder
+2. Cross-encoder
+3. Poly-Encoder
+
+A little bit different from the original implementation in the paper,
+we don't use the segment embedding for cross-encoder (easier for data processing, forgive me :)).
+'''
 
 class BertEmbedding(nn.Module):
     
-    def __init__(self, fine_tune=True, pool=False):
+    '''squeeze strategy:
+    1. first:
+    2. first-m:
+    3. average
+    '''
+    
+    def __init__(self, squeeze_strategy='first', m=0):
         super(BertEmbedding, self).__init__()
         self.model = BertModel.from_pretrained('bert-base-chinese')
-        self.fine_tune = fine_tune
-        self.pool = pool
-        self.proj = nn.Sequential(
-            nn.Linear(768*2, 768),
-            nn.Tanh(),
-            nn.Linear(768, 2)
-        )
+        self.squeeze_strategy = squeeze_strategy
+        self.m = m
 
-    def obtain_embedding(self, ids):
+    def forward(self, ids):
         '''convert ids to embedding tensor; Return: [B, 768]'''
-        if self.fine_tune:
-            embd = self.model(ids)[0]    # [B, S, 768]
-        else:
-            with torch.no_grad():
-                embd = self.model(ids)[0]
-        if self.pool:
-            rest = torch.mean(embd, dim=1)    # [B, 768]
-        else:
+        embd = self.model(ids)[0]    # [B, S, 768]
+        if self.squeeze_strategy == 'first':
             rest = embd[:, 0, :]
-        return rest    # [B, 768]
-    
-    def forward(self, cid, rid):
-        cembd = self.obtain_embedding(cid)
-        rembd = self.obtain_embedding(rid)
-        embd = torch.cat([cembd, rembd], dim=1)    # [B, 768*2]
-        rest = self.proj(embd)    # [B, 2]
+        elif self.squeeze_strategy == 'first-m':
+            rest = embd[:, :self.m, :]    # [B, M, 768]
+        elif self.squeeze_strategy == 'average':
+            rest = embd.mean(dim=1)    # [B, 768]
+        else:
+            raise Exception(f'[!] Unknow squeeze strategy {self.squeeze_strategy}')
         return rest
+    
+class BERTBIEncoder(nn.Module):
+    
+    '''During training, the other elements in the batch are seen as the negative samples, which will lead to the fast training speed. More details can be found in paper: https://arxiv.org/pdf/1905.01969v2.pdf'''
+    
+    def __init__(self):
+        self.ctx_encoder = BertEmbedding(squeeze_strategy='first')
+        self.can_encoder = BertEmbedding(squeeze_strategy='first')
+        
+    def forward(self, cid, rid, cid_mask, rid_mask, loss=True):
+        batch_size = cid.shape[0]
+        assert batch_size > 1, f'[!] batch size must bigger than 1, cause other elements in the batch will be seen as the negative samples'
+        cid_rep = self.ctx_encoder(cid, attention_mask=cid_mask)
+        rid_rep = self.can_encoder(rid, attention_mask=rid_mask)
+        # cid_rep/rid_rep: [B, 768]
+        dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B, B]
+        mask = to_cuda(torch.eye(batch_size))    # [B, B]
+        if loss:
+            loss = F.log_softmax(dot_product, dim=-1) * mask
+            loss = (-loss.sum(dim=1)).mean()
+            return loss
+        else:
+            return dot_product
     
 class BERTBiEncoderAgent(RetrievalBaseAgent):
     
@@ -44,7 +68,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         self.args = {
-            'lr': 1e-4,
+            'lr': 5e-5,
             'grad_clip': 1.0,
             'samples': 10,
             'multi_gpu': self.gpu_ids,
@@ -58,8 +82,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'pool': False,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
-        self.model = BertEmbedding(
-            fine_tune=self.args['fine-tune'], pool=self.args['pool'])
+        self.model = BERTBIEncoder()
         if torch.cuda.is_available():
             self.model.cuda()
         self.optimizer = transformers.AdamW(
@@ -76,7 +99,6 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                 self.model, device_ids=[local_rank], output_device=local_rank,
                 find_unused_parameters=True,
             )
-        self.criterion = nn.CrossEntropyLoss()
         self.show_parameters(self.args)
         
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
@@ -85,13 +107,9 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
         pbar = tqdm(train_iter)
         correct, s = 0, 0
         for idx, batch in enumerate(pbar):
-            cid, rid, label = batch
+            cid, rid, cid_mask, rid_mask = batch
             self.optimizer.zero_grad()
-            output = self.model(cid, rid)    # [B, 2]
-            loss = self.criterion(
-                output, 
-                label.view(-1),
-            )
+            loss = self.model(cid, rid, cid_mask, rid_mask)    # [B, 2]
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                 scaled_loss.backward()
             clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
@@ -100,43 +118,29 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             total_loss += loss.item()
             batch_num += 1
             
-            now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [B]
-            now_correct = torch.sum(now_correct == label).item()
-            correct += now_correct
-            s += len(label)
-            
             recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Loss', total_loss/batch_num, idx)
             recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunLoss', loss.item(), idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Acc', correct/s, idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunAcc', now_correct/len(label), idx)
 
-            pbar.set_description(f'[!] loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
+            pbar.set_description(f'[!] loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}')
         recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Loss', total_loss/batch_num, idx_)
-        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Acc', correct/s, idx_)
         return round(total_loss / batch_num, 4)
     
     @torch.no_grad()
     def test_model(self, test_iter, mode='test', recoder=None, idx_=0):
+        '''there is only one context in the batch, and response are the candidates that are need to reranked; batch size is the self.args['samples']; the groundtruth is the first one.'''
         self.model.eval()
         rest, total_loss, batch_num = [], 0, 0
         pbar = tqdm(test_iter)
         for idx, batch in enumerate(pbar):
-            cid, rid, label = batch
-            output = self.model(cid, rid)    # [B, 2]
-            loss = self.criterion(output, label.view(-1))
-            total_loss += loss.item()
-            batch_num += 1
-
-            # output: [batch, 2]
-            # only use the positive score as the final score
-            output = F.softmax(output, dim=-1)[:, 1]    # [B]
-
-            preds = [i.tolist() for i in torch.split(output, self.args['samples'])]
-            labels = [i.tolist() for i in torch.split(label, self.args['samples'])]
-            for label, pred in zip(labels, preds):
-                pred = np.argsort(pred, axis=0)[::-1]
-                rest.append(([0], pred.tolist()))
-        print(f'[!] test loss: {round(total_loss/batch_num, 4)}')
+            cid, rid, cid_mask, rid_mask = batch
+            batch_size = len(rid)
+            assert batch_size == self.args['samples'], f'samples attribute must be the same as the batch size'
+            dot_product = self.model(cid, rid, cid_mask, rid_mask, loss=False)
+            dot_product = F.softmax(dot_product.squeeze(0), dim=-1)    # [B]
+            
+            preds = dot_product.tolist()    # [10]
+            preds = np.argsort(pred, axis=0)[::-1]
+            rest.append(([0], preds.tolist()))
         p_1, r2_1, r10_1, r10_2, r10_5, MAP, MRR = cal_ir_metric(rest)
         print(f'[TEST] P@1: {p_1}; R2@1: {r2_1}; R10@1: {r10_1}; R10@2: {r10_2}; R10@5: {r10_5}; MAP: {MAP}; MRR: {MRR}')
         return round(total_loss/batch_num, 4)
