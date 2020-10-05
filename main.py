@@ -1,9 +1,7 @@
 from header import *
 from utils import *
-from models import *
 from eval import *
-from dataloader import *
-from dataset_init import * 
+from config import *
 
 def parser_args():
     parser = argparse.ArgumentParser(description='train parameters')
@@ -23,99 +21,11 @@ def parser_args():
     parser.add_argument('--local_rank', type=int)
     return parser.parse_args()
 
-def load_dataset(args):
-    if args['model'] == 'DualLSTM':
-        return load_ir_dataset(args)
-    elif args['model'] == 'seq2seq':
-        return load_seq2seq_dataset(args)
-    elif args['model'] == 'kwgpt2':
-        return load_kwgpt2_dataset(args)
-    elif args['model'] == 'gpt2':
-        args['mmi'] = False
-        return load_gpt2_dataset(args)
-    elif args['model'] == 'gpt2v2':
-        return load_gpt2v2_dataset(args)
-    elif args['model'] == 'pone':
-        return load_pone_dataset(args)
-    elif args['model'] == 'pfgpt2':
-        return load_pfgpt2_dataset(args)
-    elif args['model'] == 'gpt2_mmi':
-        args['mmi'] = True
-        return load_gpt2_dataset(args)
-    elif args['model'] == 'when2talk':
-        return load_when2talk_dataset(args)
-    elif args['model'] == 'gpt2retrieval':
-        return load_gpt2retrieval_dataset(args)
-    elif args['model'] == 'gpt2lm':
-        return load_gpt2lm_dataset(args)
-    elif args['model'] in ['gpt2gan', 'gpt2gan_v2']:
-        return load_gpt2rl_dataset(args)
-    elif args['model'] == 'multigpt2':
-        return load_multigpt2_dataset(args)
-    elif args['model'] == 'bertretrieval':
-        return load_bert_ir_dataset(args)
-    elif args['model'] == 'lcccir':
-        return load_lccc_ir_dataset(args)
-    elif args['model'] == 'lccc':
-        return load_lccc_dataset(args)
-    elif args['model'] == 'bertretrieval_multiview':
-        return load_bert_ir_multiview_dataset(args)
-    elif args['model'] == 'bertretrieval_cl':
-        return load_bert_ir_cl_dataset(args)
-    elif args['model'] in ['bertmc', 'bertmcf']:
-        return load_bert_ir_mc_dataset(args)
-    elif args['model'] == 'bertretrieval_dis':
-        return load_bert_ir_dis_dataset(args)
-    elif args['model'] == 'bertnli':
-        return load_bert_nli_dataset(args)
-    elif args['model'] == 'bertirbi':
-        return load_bert_irbi_dataset(args)
-    elif args['model'] == 'bertlogic':
-        return load_bert_logic_dataset(args)
-    elif args['model'] == 'uni':
-        return load_uni_dataset(args)
-    elif args['model'] == 'bert_na':
-        return load_bert_na_dataset(args)
-    elif args['model'] == 'transformer':
-        return load_seq2seq_trs_dataset(args)
-    else:
-        raise Exception(f'[!] got unknow model: {args["model"]}')
-
 def main(**args):
-    agent_map = {
-        'DualLSTM': DualLSTMAgent, 
-        'seq2seq': Seq2SeqAgent,
-        'gpt2': GPT2Agent,
-        'gpt2v2': GPT2V2Agent,
-        'gpt2retrieval': GPT2RetrievalAgent,
-        'pfgpt2': PFGPT2Agent,
-        'kwgpt2': KWGPT2Agent,
-        'gpt2_mmi': GPT2Agent,
-        'when2talk': When2TalkAgent,
-        'gpt2lm': GPT2Agent,
-        'multigpt2': MultiGPT2Dataset,
-        'bertretrieval': BERTRetrievalAgent,
-        'bertretrieval_multiview': BERTRetrievalAgent,
-        'bertretrieval_cl': BERTRetrievalCLAgent,
-        'bertlogic': BERTRetrievalAgent,
-        'bertnli': BERTNLIAgent,
-        'gpt2gan': GPT2RLAgent,
-        'gpt2gan_v2': GPT2RLAgent_V2,
-        'pone': PONEAgent,
-        'bertmc': BERTMCAgent,
-        'bertmcf': BERTMCAgent,
-        'lccc': LCCCFTAgent,
-        'bertretrieval_dis': BERTRetrievalDISAgent,
-        'lcccir': LCCCIRAgent,
-        'uni': UNIAgent,
-        'bert_na': BERTNAAgent,
-        'bertirbi': BERTBiEncoderAgent,
-        'transformer': TransformerAgent,
-    }
-
     if args['mode'] == 'train':
         torch.cuda.set_device(args['local_rank'])
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
+        
         train_iter = load_dataset(args)
         parameter_map, parameter_key = collect_parameter_4_model(args)
         agent = agent_map[args['model']](*parameter_map, **parameter_key)

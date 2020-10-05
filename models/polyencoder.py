@@ -60,7 +60,8 @@ class BERTBIEncoder(nn.Module):
             rid_rep = self.can_encoder(rid, rid_mask)
         # cid_rep/rid_rep: [B, 768]
         dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B, B]
-        mask = to_cuda(torch.eye(batch_size))    # [B, B]
+        # use half for supporting the apex
+        mask = to_cuda(torch.eye(batch_size)).half()    # [B, B]
         if loss:
             loss = F.log_softmax(dot_product, dim=-1) * mask
             loss = (-loss.sum(dim=1)).mean()
@@ -70,8 +71,8 @@ class BERTBIEncoder(nn.Module):
     
 class BERTBiEncoderAgent(RetrievalBaseAgent):
     
-    def __init__(self, multi_gpu, run_mode='train', local_rank=0):
-        super(BERTBiEncoderAgent, self).__init__(kb=False)
+    def __init__(self, multi_gpu, run_mode='train', local_rank=0, kb=True):
+        super(BERTBiEncoderAgent, self).__init__(kb=kb)
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(',')))) 
         except:
