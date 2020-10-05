@@ -23,9 +23,9 @@ class BertEmbedding(nn.Module):
         self.squeeze_strategy = squeeze_strategy
         self.m = m
 
-    def forward(self, ids):
+    def forward(self, ids, attn_mask):
         '''convert ids to embedding tensor; Return: [B, 768]'''
-        embd = self.model(ids)[0]    # [B, S, 768]
+        embd = self.model(ids, attention_mask=attn_mask)[0]    # [B, S, 768]
         if self.squeeze_strategy == 'first':
             rest = embd[:, 0, :]
         elif self.squeeze_strategy == 'first-m':
@@ -40,15 +40,24 @@ class BERTBIEncoder(nn.Module):
     
     '''During training, the other elements in the batch are seen as the negative samples, which will lead to the fast training speed. More details can be found in paper: https://arxiv.org/pdf/1905.01969v2.pdf'''
     
-    def __init__(self):
-        self.ctx_encoder = BertEmbedding(squeeze_strategy='first')
-        self.can_encoder = BertEmbedding(squeeze_strategy='first')
+    def __init__(self, share=False):
+        super(BERTBIEncoder, self).__init__()
+        if share:
+            self.encoder = BertEmbedding(squeeze_strategy='first')
+        else:
+            self.ctx_encoder = BertEmbedding(squeeze_strategy='first')
+            self.can_encoder = BertEmbedding(squeeze_strategy='first')
+        self.share = share
         
     def forward(self, cid, rid, cid_mask, rid_mask, loss=True):
         batch_size = cid.shape[0]
         assert batch_size > 1, f'[!] batch size must bigger than 1, cause other elements in the batch will be seen as the negative samples'
-        cid_rep = self.ctx_encoder(cid, attention_mask=cid_mask)
-        rid_rep = self.can_encoder(rid, attention_mask=rid_mask)
+        if self.share:
+            cid_rep = self.encoder(cid, cid_mask)
+            rid_rep = self.encoder(rid, rid_mask)
+        else:
+            cid_rep = self.ctx_encoder(cid, cid_mask)
+            rid_rep = self.can_encoder(rid, rid_mask)
         # cid_rep/rid_rep: [B, 768]
         dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B, B]
         mask = to_cuda(torch.eye(batch_size))    # [B, B]
@@ -80,9 +89,10 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'local_rank': local_rank,
             'fine-tune': True,
             'pool': False,
+            'share_bert': True,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
-        self.model = BERTBIEncoder()
+        self.model = BERTBIEncoder(self.args['share_bert'])
         if torch.cuda.is_available():
             self.model.cuda()
         self.optimizer = transformers.AdamW(
