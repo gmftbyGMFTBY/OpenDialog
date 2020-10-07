@@ -64,7 +64,7 @@ model_parameters = {
     'gpt2': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank'}],
     'gpt2v2': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank'}],
     'gpt2gan': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang'}],
-    'transformers': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank' 'vocab': 'vocab'}],
+    'transformers': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank', 'vocab': 'vocab'}],
 }
 
 # ========== load the config by the utils functions ========== #

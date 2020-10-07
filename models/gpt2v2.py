@@ -34,7 +34,9 @@ class GPT2V2(nn.Module):
         return output
     
     @torch.no_grad()
-    def predict_batch(self, inpt_ids, attn_mask, context_embd, response_embd, max_len):
+    def predict_batch(self, inpt_ids, attn_mask, position_ids, context_embd, response_embd, max_len):
+        '''past parameter and position_ids parameters should be careful
+        https://github.com/huggingface/transformers/issues/3021#issuecomment-681792104'''
         batch_size = inpt_ids.shape[0]
         generated = [[self.cls_id] * batch_size]
         prev, past = inpt_ids, None
@@ -44,7 +46,8 @@ class GPT2V2(nn.Module):
             outputs = self.model(
                 input_ids=prev,
                 attention_mask=attn_mask,
-                past=past
+                position_ids=position_ids,
+                past=past,
             )
             output, past = outputs[:2]
             output = output[:, -1, :]    # [batch, 768]
@@ -72,6 +75,10 @@ class GPT2V2(nn.Module):
             if sum(stop_flag) == batch_size:
                 break
             attn_mask = torch.cat([attn_mask, torch.tensor([1] * batch_size).unsqueeze(1).cuda()], dim=1)
+            if past:
+                position_ids = (attn_mask.long().cumsum(-1) - 1)
+                position_ids.masked_fill_(attn_mask == 0, 0)
+                position_ids = position_ids[:, -1].unsqueeze(-1)    # [B, 1]
         # transpose
         ng, batch_size = [], len(generated[0])
         for i in range(batch_size):
@@ -90,7 +97,6 @@ class GPT2V2(nn.Module):
             output = outputs[0][-1, :]    # [768]
             output = torch.cat([output, policy_embd], dim=-1)    # [768+32]
             next_token_logits = self.proj(output)    # [vocab]
-            # next_token_logits = outputs[0][-1, :]    # [V]
             next_token_logits[self.unk_id] = -np.inf
             if generated:
                 next_token_logits[list(set(generated))] /= self.repetition_penalty
@@ -104,7 +110,7 @@ class GPT2V2(nn.Module):
                 num_samples=1,
             )
             generated.append(next_token.item())
-            if next_token == self.sep_id:
+            if next_token.item() == self.sep_id:
                 break
             inpt_ids = torch.cat((inpt_ids, next_token), dim=0)
             inpt_ids = inpt_ids[-self.n_ctx:]
@@ -132,7 +138,7 @@ class GPT2V2Agent(BaseAgent):
             'run_mode': run_mode,
             'vocab_file': vocab_file,
             'lang': lang,
-            'repetition_penalty': 1.2,
+            'repetition_penalty': 1.,
             'amp_level': 'O2',
             'local_rank': local_rank,
             'policy_size': 32,
@@ -243,9 +249,41 @@ class GPT2V2Agent(BaseAgent):
         recoder.add_scalar(f'train-whole-{self.args["local_rank"]}/TokenAcc', np.mean(total_acc), idx_)
         recoder.add_scalar(f'train-whole-{self.args["local_rank"]}/Loss', total_loss/batch_num, idx_)
         return round(total_loss/batch_num, 4)
-
+    
     @torch.no_grad()
     def test_model(self, test_iter, path):
+        '''Generate the test dataset and measure the performance'''
+        self.model.eval()
+        pbar = tqdm(test_iter)
+        with open(path, 'w') as f:
+            for batch in pbar:
+                cid, rid, context_text, response_text = batch
+                context_embd = convert_text_embedding(self.w2v, [context_text])[0]
+                context_embd = torch.tensor(context_embd, dtype=torch.float).cuda()
+                response_embd = convert_text_embedding(
+                    self.w2v,
+                    response_text,
+                )    # [candidate, 300]
+                r_embd = [torch.tensor(i, dtype=torch.float) for i in response_embd]
+                r_embd = torch.stack(r_embd).mean(dim=0).cuda()    # [300]
+                
+                max_size = max(len(rid), self.args['tgt_len_size'])
+                tgt = self.model.predict(
+                    cid, context_embd, r_embd, max_size,
+                )
+                text = ''.join(self.vocab.convert_ids_to_tokens(tgt))
+                ctx = ''.join(self.vocab.convert_ids_to_tokens(cid))
+                ref = ''.join(self.vocab.convert_ids_to_tokens(rid))
+                f.write(f'CTX: {ctx}\n')
+                f.write(f'REF: {ref}\n')
+                f.write(f'TGT: {text}\n\n')
+        print(f'[!] translate test dataset over, write into {path}')
+        # measure the performance
+        (b1, b2, b3, b4), ((r_max_l, r_min_l, r_avg_l), (c_max_l, c_min_l, c_avg_l)), (dist1, dist2, rdist1, rdist2), (average, extrema, greedy) = cal_generative_metric(path, lang=self.args['lang'])
+        print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Length(max, min, avg): {c_max_l}/{c_min_l}/{c_avg_l}|{r_max_l}/{r_min_l}/{r_avg_l}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
+
+    @torch.no_grad()
+    def test_model_batch(self, test_iter, path):
         '''Generate the test dataset and measure the performance'''
         def filter(x):
             return x.replace('[PAD]', '')
@@ -257,7 +295,7 @@ class GPT2V2Agent(BaseAgent):
         pbar = tqdm(test_iter)
         with open(path, 'w') as f:
             for batch in pbar:
-                cid, rid, attn_mask, context_text, response_text = batch
+                cid, rid, attn_mask, position_ids, context_text, response_text = batch
                 context_embd = convert_text_embedding(self.w2v, context_text)
                 context_embd = torch.tensor(context_embd, dtype=torch.float).cuda()
                 r_embd = []
@@ -271,7 +309,7 @@ class GPT2V2Agent(BaseAgent):
                 
                 max_size = min(len(rid), self.args['tgt_len_size'])
                 tgt = self.model.predict_batch(
-                    cid, attn_mask, context_embd, r_embd, max_size,
+                    cid, attn_mask, position_ids, context_embd, r_embd, max_size,
                 )
                 for tgt_, ctx, ref in zip(tgt, cid, rid):
                     text = self.vocab.convert_ids_to_tokens(tgt_)

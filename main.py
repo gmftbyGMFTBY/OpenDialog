@@ -67,7 +67,7 @@ def main(**args):
         agent = agent_map[args['model']](*parameter_map, **parameter_key)
         agent.load_model(f'ckpt/{args["dataset"]}/{args["model"]}/best.pt')
         rest_path = f'rest/{args["dataset"]}/{args["model"]}/rest.txt'
-        test_loss = agent.test_model(test_iter, rest_path)
+        test_loss = agent.test_model_batch(test_iter, rest_path)
 
 if __name__ == "__main__":
     args = parser_args()

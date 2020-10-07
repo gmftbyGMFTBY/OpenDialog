@@ -1779,7 +1779,9 @@ class GPT2V2Dataset(Dataset):
                 ids, labels = ids.cuda(), labels.cuda()
             return ids, labels, ctx_text, candidate_text
         else:
+            # ========== BATCH SIZE BIGGER THAN 1 ========== #
             max_len = max([len(i['ids']) for i in batch])
+            position_ids = torch.LongTensor([[0] * (max_len - len(i['ids'])) + list(range(len(i['ids']))) for i in batch])
             ids = torch.LongTensor([[self.pad_id] * (max_len - len(i['ids'])) + i['ids'] for i in batch])
             attn_mask_index = ids.nonzero().tolist()
             attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
@@ -1789,12 +1791,13 @@ class GPT2V2Dataset(Dataset):
             if torch.cuda.is_available():
                 ids = ids.cuda()
                 attn_mask = attn_mask.cuda()
+                position_ids = position_ids.cuda()
             ctx_text = [i['context_text'] for i in batch]
             candidate_text = [i['response_text'] for i in batch]
             rids = [torch.LongTensor(i['rids']) for i in batch]
-            return ids, rids, attn_mask, ctx_text, candidate_text
+            return ids, rids, attn_mask, position_ids, ctx_text, candidate_text
         
-            # ========== BATCH SIZE IS 1 VERSION ==========
+            # ========== BATCH SIZE IS 1 VERSION ========== #
             # assert len(batch) == 1, f'[!] batch must be 1, but got {len(batch)}'
             # ids = torch.LongTensor(batch[0]['ids'])
             # rids = torch.LongTensor(batch[0]['rids'])

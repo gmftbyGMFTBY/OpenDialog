@@ -90,4 +90,7 @@
 - [x] LCCC的GPT2模型训练retrieval dialog system效果不好
 - [x] 检索式对话系统，使用候选回复的上下文的信息 KDD 2020 的思路，很棒
 - [x] 快速bert检索式对话系统，通过使用bi-encoder的架构，拥有bert的效果也拥有极快的线上运算速度(效果保证使用了知识蒸馏)
+- [ ] PolyEncoder待完成(Bi-encoder, cross-encoder, polyencoedr)参考仓库: https://github.com/chijames/Poly-Encoder/
+- [ ] 测试GPT-2的生成batch和non-batch的差距。non-batch确实比batch好，但是很奇怪，照理说attention mask用上了就可以忽略了padding了，可能还有一些内在的机理，比如position embedding的影响。测试一下position id是否可以提高效果并使用batch。
+- [ ] 知识图谱增强的检索式对话系统
 
