@@ -55,7 +55,7 @@ class GPT2(nn.Module):
         return generated
 
     @torch.no_grad()
-    def predict_batch(self, inpt_ids, attn_mask, max_len):
+    def predict_batch(self, inpt_ids, attn_mask, position_ids, max_len):
         '''inpt_ids: [batch, seq]; return: samples'''
         # change inpt_ids from [seq] to [batch, seq]
         batch_size = inpt_ids.shape[0]
@@ -63,7 +63,12 @@ class GPT2(nn.Module):
         prev, past = inpt_ids, None
         stop_flag = np.zeros(batch_size)    # [batch]
         for _ in range(max_len):
-            outputs = self.model(input_ids=prev, attention_mask=attn_mask, past=past)    # [batch, seq, vocab]
+            outputs = self.model(
+                input_ids=prev, 
+                attention_mask=attn_mask, 
+                past=past,
+                position_ids=position_ids,
+            )    # [batch, seq, vocab]
             output, past = outputs[:2]
             next_token_logits = output[:, -1, :]    # [batch, vocab]
             next_token_logits[:, self.unk_id] = -np.inf
@@ -89,6 +94,10 @@ class GPT2(nn.Module):
             if sum(stop_flag) == batch_size:
                 break
             attn_mask = torch.cat([attn_mask, torch.tensor([1] * batch_size).unsqueeze(1).cuda()], dim=1)
+            if past:
+                position_ids = (attn_mask.long().cumsum(-1) - 1)
+                position_ids.masked_fill_(attn_mask == 0, 0)
+                position_ids = position_ids[:, -1].unsqueeze(-1)    # [B, 1]
         # transpose
         ng, batch_size = [], len(generated[0])
         for i in range(batch_size):
@@ -220,6 +229,7 @@ class GPT2Agent(BaseAgent):
         recoder.add_scalar(f'train-whole-{self.args["local_rank"]}/Loss', total_loss/batch_num, idx_)
         return round(total_loss/batch_num, 4)
 
+    @torch.no_grad()
     def test_model_samples(self, test_iter, path, samples=5):
         '''
         Generate `samples` candidates for one given conversation context
@@ -296,9 +306,11 @@ class GPT2Agent(BaseAgent):
         pbar = tqdm(test_iter)
         with open(path, 'w') as f:
             for batch in pbar:
-                c, attn_mask, r = batch
+                c, attn_mask, position_ids, r = batch
                 max_size = min(len(r), self.args['tgt_len_size'])
-                tgt = self.model.predict_batch(c, attn_mask, max_size)
+                tgt = self.model.predict_batch(
+                    c, attn_mask, position_ids, max_size
+                )
                 for tgt_, c_, r_ in zip(tgt, c, r):
                     text = self.vocab.convert_ids_to_tokens(tgt_)
                     text = filter_tgt(''.join(text))

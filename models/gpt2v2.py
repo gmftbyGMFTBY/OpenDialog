@@ -251,7 +251,7 @@ class GPT2V2Agent(BaseAgent):
         return round(total_loss/batch_num, 4)
     
     @torch.no_grad()
-    def test_model(self, test_iter, path):
+    def test_model_one_instance(self, test_iter, path):
         '''Generate the test dataset and measure the performance'''
         self.model.eval()
         pbar = tqdm(test_iter)
@@ -283,7 +283,7 @@ class GPT2V2Agent(BaseAgent):
         print(f'[TEST] BLEU: {b1}/{b2}/{b3}/{b4}; Length(max, min, avg): {c_max_l}/{c_min_l}/{c_avg_l}|{r_max_l}/{r_min_l}/{r_avg_l}; Dist: {dist1}/{dist2}|{rdist1}/{rdist2}; Embedding(average/extrema/greedy): {average}/{extrema}/{greedy}')
 
     @torch.no_grad()
-    def test_model_batch(self, test_iter, path):
+    def test_model(self, test_iter, path):
         '''Generate the test dataset and measure the performance'''
         def filter(x):
             return x.replace('[PAD]', '')

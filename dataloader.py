@@ -322,9 +322,10 @@ class GPT2Dataset(Dataset):
             #     ctx, res = ctx.cuda(), res.cuda()
             # return ctx, res
             
-            # NOTE: BATCH VERSION, PAD IN THE FIRST;
+            # NOTE: BATCH VERSION, PAD IN THE LEFT;
             max_len = max([len(i['context_id']) for i in batch])
             ctx = torch.LongTensor([[self.pad_id] * (max_len - len(i['context_id'])) + i['context_id'] for i in batch])
+            position_ids = torch.LongTensor([[0] * (max_len - len(i['context_id'])) + list(range(len(i['context_id']))) for i in batch])
             attn_mask_index = ctx.nonzero().tolist()
             attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
             attn_mask = ctx.clone()
@@ -333,7 +334,8 @@ class GPT2Dataset(Dataset):
             if torch.cuda.is_available():
                 ctx = ctx.cuda()
                 attn_mask = attn_mask.cuda()
-            return ctx, attn_mask, res
+                position_ids = position_ids.cuda()
+            return ctx, attn_mask, position_ids, res
 
 class MultiGPT2Dataset(Dataset):
 
