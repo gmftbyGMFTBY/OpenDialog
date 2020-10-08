@@ -24,6 +24,7 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from collections import Counter, OrderedDict
 from torch.nn.utils import clip_grad_norm_
+from torch.distributions import MultivariateNormal
 import random
 from elasticsearch import Elasticsearch, helpers
 from .model_utils import *

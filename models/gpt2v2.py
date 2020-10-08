@@ -41,7 +41,9 @@ class GPT2V2(nn.Module):
         generated = [[self.cls_id] * batch_size]
         prev, past = inpt_ids, None
         stop_flag = np.zeros(batch_size)
-        policy_embd = self.agent(torch.cat([context_embd, response_embd], dim=-1))   # [batch, 32]
+        policy_embd = self.agent(
+            torch.cat([context_embd, response_embd], dim=-1), 
+        )   # [batch, 32]
         for _ in range(max_len):
             outputs = self.model(
                 input_ids=prev,
@@ -118,7 +120,7 @@ class GPT2V2(nn.Module):
 
 class GPT2V2Agent(BaseAgent):
 
-    def __init__(self, total_steps, multi_gpu, vocab_file='data/vocab/vocab_small', run_mode='train', lang='zh', local_rank=0):
+    def __init__(self, total_steps, multi_gpu, run_mode='train', lang='zh', local_rank=0):
         super(GPT2V2Agent, self).__init__()
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(','))))
@@ -136,7 +138,7 @@ class GPT2V2Agent(BaseAgent):
             'config_path': 'data/config/model_config_dialogue_small.json',
             'multi_gpu': self.gpu_ids,
             'run_mode': run_mode,
-            'vocab_file': vocab_file,
+            'vocab_file': 'data/vocab/vocab_small',
             'lang': lang,
             'repetition_penalty': 1.,
             'amp_level': 'O2',

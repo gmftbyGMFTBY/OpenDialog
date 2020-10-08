@@ -4,9 +4,9 @@ class BERTRetrieval(nn.Module):
 
     def __init__(self, model='bert-base-chinese'):
         super(BERTRetrieval, self).__init__()
-        self.model = BertForSequenceClassification.from_pretrained(model,num_labels=2)
+        self.model = BertForSequenceClassification.from_pretrained(model, num_labels=2)
 
-    def forward(self, inpt, token_type_ids):
+    def forward(self, inpt):
         '''
         inpt: [batch, seq]
         '''
@@ -14,9 +14,8 @@ class BERTRetrieval(nn.Module):
         output = self.model(
             input_ids=inpt,
             attention_mask=attn_mask,
-            token_type_ids=token_type_ids,
         )
-        logits = output[0].squeeze(1)    # [batch, 1] -> [batch]
+        logits = output[0]    # [batch, 2]
         return logits
     
 class BERTRetrievalDISAgent(RetrievalBaseAgent):

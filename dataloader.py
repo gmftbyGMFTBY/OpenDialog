@@ -847,6 +847,8 @@ class BERTIRBIDataset(Dataset):
                 item = self.vocab.batch_encode_plus([context, response])
                 cid, cid_mask = item['input_ids'][0], item['attention_mask'][0]
                 rid, rid_mask = item['input_ids'][1], item['attention_mask'][1]
+                cid, cid_mask = self._length_limit(cid, cid_mask)
+                rid, rid_mask = self._length_limit(rid, rid_mask)
                 self.data.append({
                     'cid': cid,
                     'rid': rid,
@@ -865,13 +867,24 @@ class BERTIRBIDataset(Dataset):
             for context, response in tqdm(d_):
                 item = self.vocab.batch_encode_plus([context] + response)
                 cid, cid_mask = item['input_ids'][0], item['attention_mask'][0]
-                rids, rids_mask = item[input_ids][1:], item['attention_mask'][1:]
+                cid, cid_mask = self._length_limit(cid, cid_mask)
+                rids, rids_mask = [], []
+                for sample_ids, sample_mask in zip(item['input_ids'][1:], item['attention_mask'][1:]):
+                    sample_ids, sample_mask = self._length_limit(sample_ids, sample_mask)
+                    rids.append(sample_ids)
+                    rids_mask.append(sample_mask)
                 self.data.append({
                     'cid': cid,
                     'cid_mask': cid_mask,
                     'rids': rids,
                     'rids_mask': rids_mask,
                 })
+                
+    def _length_limit(self, ids, ids_mask):
+        if len(ids) > self.max_len:
+            ids = [ids[0]] + ids[-(self.max_len-1):]
+            ids_mask = ids_mask[-self.max_len:]    # all 1
+        return ids, ids_mask
                 
     def __len__(self):
         return len(self.data)
@@ -1593,6 +1606,8 @@ class GPT2LMDataset(Dataset):
     
 class GPT2V2RLDataset(Dataset):
     
+    '''batch inference issue has been solved, we don"t need to customize the dataloader'''
+    
     def __init__(self, path, mode='train', min_length=20, lang='zh', src_len_size=512, tgt_len_size=128, candidate=5):
         vocab_file = 'data/vocab/vocab_small' if lang == 'zh' else 'data/vocab/vocab_english'
         self.mode = mode
@@ -1628,12 +1643,14 @@ class GPT2V2RLDataset(Dataset):
                 if len(can) < self.candidate:
                     continue
                 bundle = dict()
-                ctx_tokens = self.vocab.encode(ctx)
                 res_tokens = self.vocab.encode(res)
-                if len(ctx_tokens) < min_length:
+                item = self.vocab.batch_encode_plus([ctx])
+                cid, cid_mask = item['input_ids'][0][-self.src_len_size:], item['attention_mask'][0][-self.src_len_size:]
+                if len(cid) < min_length:
                     continue
-                bundle['ids'] = ctx_tokens[-self.src_len_size:]
-                bundle['rids'] = res_tokens
+                bundle['cids'] = cid
+                bundle['cids_mask'] = cid_mask
+                bundle['rids'] = res_tokens[:self.tgt_len_size]
                 bundle['context_text'] = ctx.replace('[SEP]', '')
                 bundle['response_text'] = can
                 self.data.append(bundle)
@@ -1648,20 +1665,24 @@ class GPT2V2RLDataset(Dataset):
         return self.data[i]
     
     def collate(self, batch):
-        max_len = max([len(i['ids']) for i in batch])
-        ids = torch.LongTensor([[self.pad_id] * (max_len - len(i['ids'])) + i['ids'] for i in batch])
-        attn_mask_index = ids.nonzero().tolist()
+        max_len = max([len(i['cids']) for i in batch])
+        position_ids = torch.LongTensor([[0] * (max_len - len(i['cids'])) + list(range(len(i['cids']))) for i in batch])
+        cids = torch.LongTensor([[self.pad_id] * (max_len - len(i['cids'])) + i['cids'] for i in batch])
+        rids = pad_sequence(
+            [torch.LongTensor(i['rids']) for i in batch], 
+            batch_first=True, padding_value=self.pad_id,
+        )
+        attn_mask_index = cids.nonzero().tolist()
         attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
-        attn_mask = ids.clone()
+        attn_mask = cids.clone()
         attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
-        res = [i['rids'] for i in batch]
         if torch.cuda.is_available():
-            ids = ids.cuda()
+            cids, rids = cids.cuda(), rids.cuda()
             attn_mask = attn_mask.cuda()
+            position_ids = position_ids.cuda()
         ctx_text = [i['context_text'] for i in batch]
         candidate_text = [i['response_text'] for i in batch]
-        rids = [torch.LongTensor(i['rids']) for i in batch]
-        return ids, rids, attn_mask, ctx_text, candidate_text
+        return cids, rids, attn_mask, position_ids, ctx_text, candidate_text
 
 class GPT2V2Dataset(Dataset):
     

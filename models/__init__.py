@@ -2,6 +2,7 @@ from .retrieval import *
 from .seq2seq import *
 from .gpt2 import *
 from .gpt2v2 import *
+from .gpt2v2rl import *
 from .gpt2retrieval import *
 from .pf_gpt2 import *
 from .kwgpt2 import *

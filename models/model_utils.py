@@ -38,15 +38,16 @@ class ActorCritic(nn.Module):
         :embedding: [B, E*2]'''
         return self.actor(embedding)    # [B, Policy_size]
     
-    def act(self, state, memory):
+    def act(self, state, memory=None):
         action_mean = self.actor(state)
         cov_mat = torch.diag(self.action_var)
         dist = MultivariateNormal(action_mean, cov_mat)
         action = dist.sample()
         action_logprob = dist.log_prob(action)
-        memory.states.append(state)
-        memory.actions.append(action)
-        memory.logprobs.append(action_logprob)
+        if memory:
+            memory.states.append(state)
+            memory.actions.append(action)
+            memory.logprobs.append(action_logprob)
         return action.detach()
     
     def evaluate(self, state, action):   

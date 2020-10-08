@@ -7,6 +7,7 @@ dataset_loader = {
     'kwgpt2': load_kwgpt2_dataset,
     'gpt2': load_gpt2_dataset,
     'gpt2v2': load_gpt2v2_dataset,
+    'gpt2v2rl': load_gpt2v2rl_dataset,
     'pone': load_pone_dataset,
     'pfgpt2': load_pfgpt2_dataset,
     'when2talk': load_when2talk_dataset,
@@ -28,6 +29,7 @@ agent_map = {
     'seq2seq': Seq2SeqAgent,
     'gpt2': GPT2Agent,
     'gpt2v2': GPT2V2Agent,
+    'gpt2v2rl': GPT2V2RLAgent,
     'gpt2retrieval': GPT2RetrievalAgent,
     'pfgpt2': PFGPT2Agent,
     'kwgpt2': KWGPT2Agent,
@@ -63,8 +65,10 @@ model_parameters = {
     'seq2seq': [('multi_gpu', 'vocab'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank'}],
     'gpt2': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank'}],
     'gpt2v2': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank'}],
+    'gpt2v2rl': [('multi_gpu',), {'lang': 'lang', 'run_mode': 'mode'}],
     'gpt2gan': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang'}],
     'transformers': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank', 'vocab': 'vocab'}],
+    'bertirbi': [('multi_gpu',), {'run_mode': 'mode', 'local_rank': 'local_rank'}],
 }
 
 # ========== load the config by the utils functions ========== #
