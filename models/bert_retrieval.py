@@ -9,9 +9,6 @@ class BERTRetrieval(nn.Module):
         self.model = BertForSequenceClassification.from_pretrained(model, num_labels=2)
 
     def forward(self, inpt, token_type_ids, attn_mask):
-        '''
-        inpt: [batch, seq]
-        '''
         output = self.model(
             input_ids=inpt,
             attention_mask=attn_mask,
@@ -22,30 +19,24 @@ class BERTRetrieval(nn.Module):
     
 class BERTRetrievalAgent(RetrievalBaseAgent):
 
-    '''
-    Support Multi GPU, for example '1,2'
-    '''
-
     def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True, local_rank=0):
         super(BERTRetrievalAgent, self).__init__(kb=kb)
-        # hyperparameters
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(',')))) 
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         self.args = {
-            'lr': 1e-4,
-            'grad_clip': 3.0,
+            'lr': 1e-5,
+            'grad_clip': 1.0,
             'samples': 10,
             'multi_gpu': self.gpu_ids,
             'talk_samples': 256,
             'vocab_file': 'bert-base-chinese',
-            'pad': 0,    # bert-base-chinese
+            'pad': 0,
             'model': 'bert-base-chinese',
             'amp_level': 'O2',
             'local_rank': local_rank,
         }
-        # hyperparameters
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         self.model = BERTRetrieval(self.args['model'])
         if torch.cuda.is_available():
@@ -54,14 +45,16 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             self.model.parameters(), 
             lr=self.args['lr'],
         )
+        self.criterion = nn.CrossEntropyLoss()
         if run_mode == 'train':
             self.model, self.optimizer = amp.initialize(
                 self.model, 
                 self.optimizer, 
                 opt_level=self.args['amp_level']
             )
-            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
-        self.criterion = nn.CrossEntropyLoss()
+            self.model = nn.parallel.DistributedDataParallel(
+                self.model, device_ids=[local_rank], output_device=local_rank,
+            )
         self.show_parameters(self.args)
 
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
@@ -81,27 +74,24 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                 scaled_loss.backward()
             clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
-            # loss.backward()
-            # clip_grad_norm_(self.model.parameters(), self.args['grad_clip'])
             self.optimizer.step()
 
             total_loss += loss.item()
             batch_num += 1
             
-            # now_correct = torch.sum((output > 0.5) == label).item()
             now_correct = torch.max(F.softmax(output, dim=-1), dim=-1)[1]    # [batch]
             now_correct = torch.sum(now_correct == label).item()
             correct += now_correct
             s += len(label)
             
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Loss', total_loss/batch_num, idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunLoss', loss.item(), idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Acc', correct/s, idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunAcc', now_correct/len(label), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Acc', correct/s, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', now_correct/len(label), idx)
 
             pbar.set_description(f'[!] train loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}; acc: {round(now_correct/len(label), 4)}|{round(correct/s, 4)}')
-        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Loss', total_loss/batch_num, idx_)
-        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Acc', correct/s, idx_)
+        recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
+        recoder.add_scalar(f'train-whole/Acc', correct/s, idx_)
         return round(total_loss / batch_num, 4)
 
     def test_model(self, test_iter, path):
@@ -116,11 +106,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
                 loss = self.criterion(output, label.view(-1))
                 total_loss += loss.item()
                 batch_num += 1
-
-                # output: [batch, 2]
-                # only use the positive score as the final score
                 output = F.softmax(output, dim=-1)[:, 1]    # [batch]
-
                 preds = [i.tolist() for i in torch.split(output, self.args['samples'])]
                 labels = [i.tolist() for i in torch.split(label, self.args['samples'])]
                 for label, pred in zip(labels, preds):
@@ -134,24 +120,17 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
     def talk(self, topic, msgs):
         self.model.eval()
         with torch.no_grad():
-            # retrieval and process
             utterances_, ids = self.process_utterances(topic, msgs)
-            # rerank, ids: [batch, seq]
-            output = self.model(ids)    # [batch, 2]
-            output = F.softmax(output, dim=-1)[:, 1]    # [batch]
+            output = self.model(ids)    # [B, 2]
+            output = F.softmax(output, dim=-1)[:, 1]    # [B]
             item = torch.argmax(output).item()
             msg = utterances_[item]
             return msg
 
     def reverse_search(self, ctx, ctx_, res):
-        '''
-        ctx/res: a list of string
-        NOTE: Should remove the F.softmax in this function, set it into the forward
-        '''
         with torch.no_grad():
             utterances_ = self.searcher.search(None, ctx, samples=self.args['talk_samples'])
             utterances_ = [i['context'] for i in utterances_]
-            # for mask
             if ctx_ in utterances_:
                 mask_index = utterances_.index(ctx_)
             else:
@@ -167,7 +146,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             output = F.softmax(output, dim=-1)[:, 1]
             item = torch.argmax(output)
             rest = utterances_[item]
-            return rest 
+            return rest
 
     def rerank(self, topic, msgs, topk=2):
         self.model.eval()
@@ -190,14 +169,14 @@ class BERTRetrievalDISAgent(RetrievalBaseAgent):
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         self.args = {
-                'lr': 1e-5,
-                'grad_clip': 3.0,
-                'samples': 10,
-                'multi_gpu': self.gpu_ids,
-                'talk_samples': 256,
-                'vocab_file': 'bert-base-chinese',
-                'pad': 0,
-                'model': 'bert-base-chinese',
+            'lr': 1e-5,
+            'grad_clip': 3.0,
+            'samples': 10,
+            'multi_gpu': self.gpu_ids,
+            'talk_samples': 256,
+            'vocab_file': 'bert-base-chinese',
+            'pad': 0,
+            'model': 'bert-base-chinese',
         }
         # hyperparameters
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])

@@ -1,21 +1,15 @@
 from .header import *
 
-'''PolyEncoder: https://arxiv.org/pdf/1905.01969v2.pdf
+'''
+PolyEncoder: https://arxiv.org/pdf/1905.01969v2.pdf
 1. Bi-encoder
-2. Cross-encoder
+2. Cross-encoder (refer to bertretrieval)
 3. Poly-Encoder
-
-A little bit different from the original implementation in the paper,
-we don't use the segment embedding for cross-encoder (easier for data processing, forgive me :)).
 '''
 
 class BertEmbedding(nn.Module):
     
-    '''squeeze strategy:
-    1. first:
-    2. first-m:
-    3. average
-    '''
+    '''squeeze strategy: 1. first; 2. first-m; 3. average'''
     
     def __init__(self, squeeze_strategy='first', m=0):
         super(BertEmbedding, self).__init__()
@@ -87,7 +81,6 @@ class BERTBiEncoder(nn.Module):
         return loss, acc
         
     def predict(self, cid, rid, cid_mask, rid_mask):
-        '''cid: [1, S]; rid: [B, S]'''
         cid_rep, rid_rep = self._encode(cid, rid, cid_mask, rid_mask)
         # cid_rep: [768] -> [1, 768]; rid_rep: [B, 768]
         dot_product = torch.matmul(cid_rep, rid_rep.t()).squeeze(0)  # [B]
@@ -166,7 +159,7 @@ class PolyEncoderAgent(RetrievalBaseAgent):
     
     @torch.no_grad()
     def test_model(self, test_iter, mode='test', recoder=None, idx_=0):
-        '''there is only one context in the batch, and response are the candidates that are need to reranked; batch size is the self.args['samples']; the groundtruth is the first one.'''
+        '''there is only one context in the batch, and response are the candidates that are need to reranked; batch size is the self.args['samples']; the groundtruth is the first one'''
         self.model.eval()
         rest = []
         pbar = tqdm(test_iter)
@@ -175,7 +168,6 @@ class PolyEncoderAgent(RetrievalBaseAgent):
             batch_size = len(rid)
             assert batch_size == self.args['samples'], f'samples attribute must be the same as the batch size'
             dot_product = self.model.predict(cid, rid, cid_mask, rid_mask)
-            
             preds = dot_product.tolist()    # [10]
             preds = np.argsort(preds, axis=0)[::-1]
             rest.append(([0], preds.tolist()))

@@ -88,11 +88,10 @@ class BaseAgent:
             ]
         }
         '''
-        topic = data['topic']
         msgs = [i['msg'] for i in data['msgs']]
         msgs = '[SEP]'.join(msgs)
         # feed the model and obtain the result
-        res = self.talk(topic, msgs)
+        res = self.talk(msgs)
         self.history.append(res)
         return res
 
@@ -149,9 +148,7 @@ class RetrievalBaseAgent:
         raise NotImplementedError
 
     def process_utterances(self, topic, msgs):
-        '''
-        Process the utterances searched by Elasticsearch
-        '''
+        '''Process the utterances searched by Elasticsearch; input_ids/token_type_ids/attn_mask'''
         utterances_ = self.searcher.search(topic, msgs, samples=self.args['talk_samples'])
         utterances_ = [i['response'] for i in utterances_]
         # remove the utterances that in the self.history
@@ -188,10 +185,9 @@ class RetrievalBaseAgent:
             ]
         }
         '''
-        topic = data['topic']
         msgs = [i['msg'] for i in data['msgs']]
         msgs = '[SEP]'.join(msgs)
-        # feed the model and obtain the result
-        res = self.talk(topic, msgs)
+        topic = data['topic'] if 'topic' in data else None
+        res = self.talk(msgs, topic=topic)
         self.history.append(res)
         return res

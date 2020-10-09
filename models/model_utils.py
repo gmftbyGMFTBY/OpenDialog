@@ -324,39 +324,37 @@ class ESChat:
     def __init__(self, index_name, kb=True):
         self.es = Elasticsearch(http_auth=('elastic', 'elastic123'))
         self.index = index_name
-        # if kb:
-        #     self.kwparser = KBKWParser()
-        # else:
-        #     self.kwparser = KWParser()
-        self.topic_dict = {
-                '电影': '电影 电视剧 明星 动漫',
-                '数码产品': '数码产品 数码 相机 手机 电脑 笔记本 iphone ipad',
-                '美食': '饮料 美食 饭菜 零食 肉 蛋 奶 烹饪',
-                '音乐': '舞曲 歌舞 音乐 流行乐 乐器 DJ 作曲',
-                '体育': '体育 运动 健身 减肥 锻炼 养生 竞赛 运动会'
-                }
 
-    def search(self, topic, query, samples=10, topk=10):
+    def search(self, query, samples=10, topic=None):
         '''
         query is the string, which contains the utterances of the conversation context.
         1. topic msg
         2. key word msg
         cantenate with the space operator
-        '''
-        # 1. topic
-        if topic:
-            query = f"{self.topic_dict[topic]} [SEP] {query}"
-            query = f'{topic}; {query}'
+        
         # 'context': query is Q-Q matching
         # 'response': query is Q-A matching, which seems better
-        dsl = {
-            'query': {
-                'match': {
-                    # 'context': query
-                    'response': query    # Q-A matching is better
+        '''
+        if topic is None:
+            dsl = {
+                'query': {
+                    'match': {
+                        'response': query    # Q-A matching is better
+                    }
                 }
             }
-        }
+        else:
+            # https://www.elastic.co/guide/cn/elasticsearch/guide/current/multi-query-strings.html
+            dsl = {
+                'query': {
+                    'bool': {
+                        "should": [
+                            {"match": {"response": topic}},
+                            {"match": {"response": query}}
+                        ]
+                    }
+                }
+            }
         begin_samples, rest = samples, []
         while len(rest) == 0:
             hits = self.es.search(index=self.index, body=dsl, size=begin_samples)['hits']['hits']
@@ -388,8 +386,8 @@ class ESChat:
         rest = self.es.msearch(body=request)
         return rest
 
-    def talk(self, topic, msgs):
-        rest = self.search(topic, msgs, samples=1)[0]['response']
+    def talk(self, msgs, topic=None):
+        rest = self.search(msgs, samples=1, topic=topic)[0]['response']
         # for debug
         # rest = self.search(topic, msgs, samples=10)
         # rest = [i['response'] for i in rest]

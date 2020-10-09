@@ -4,17 +4,17 @@ from .header import *
 ElasticSearch Baseline
 '''
 
-class TestAgent(BaseAgent):
+class TestAgent(RetrievalBaseAgent):
 
     def __init__(self, kb=True):
         super(TestAgent, self).__init__()
-        self.model = ESChat('zh50w_database', kb=kb)
+        self.model = ESChat('retrieval_database', kb=kb)
 
-    def talk(self, topic, msgs):
-        return self.model.talk(topic, msgs) 
+    def talk(self, msgs, topic=None):
+        return self.model.talk(msgs, topic=topic) 
 
     def obtain_qa_pair(self, msgs, samples=2):
-        rest = self.model.search(None, msgs, samples=samples)
+        rest = self.model.search(msgs, samples=samples)
         pairs = []
         for item in rest:
             c, r = item['context'], item['response']
