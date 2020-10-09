@@ -11,6 +11,7 @@ import ipdb
 import json
 import re
 import pickle
+import requests
 from tqdm import tqdm
 from copy import deepcopy
 import torch

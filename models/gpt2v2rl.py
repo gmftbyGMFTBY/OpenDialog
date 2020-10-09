@@ -82,7 +82,7 @@ class GPT2V2RL(nn.Module):
                 y = [item[x] for item in generated]
                 next_token_logits[x, y] /= self.repetition_penalty
             filtered_logits = top_k_top_p_filtering_batch(
-                next_token_logits, 
+                next_token_logits,
                 top_k=self.topk, 
                 top_p=self.topp,
             )

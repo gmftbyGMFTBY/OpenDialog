@@ -94,7 +94,7 @@ def wechat_api():
         my_nonce = request.args.get('nonce')
         my_echostr = request.args.get('echostr')
 
-        token = 'xxxxxxxx'    # your token
+        token = 'xxxx'    # your token
 
         data = [token, my_timestamp, my_nonce]
         data.sort()

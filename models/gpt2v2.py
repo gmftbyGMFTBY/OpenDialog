@@ -19,7 +19,7 @@ class GPT2V2(nn.Module):
         self.cls_id = cls_id
         self.repetition_penalty = repetition_penalty
         
-        self.agent = ActorCritic(policy_size, embedding_size)
+        self.agent = ActorCritic(policy_size, embedding_size, action_std=0.1)
         self.proj = nn.Linear(self.n_embd + policy_size, vocab_size)
 
     def forward(self, inpt_ids, context_embd, response_embd):

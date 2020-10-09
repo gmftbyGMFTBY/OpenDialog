@@ -27,7 +27,7 @@ retrieval_datasets = ['ECG', 'zhihu', 'zhidao', 'kgdialog', 'kdconv', 'zh50w', '
 # do not use zhihu dataset for generative dialog, which leads to the long but nonsense generated results
 generative_datasets = ['kgdialog', 'kdconv', 'zh50w', 'xiaohuangji', 'doubangroup']
 
-single_turn = ['ECG', 'zhihu', 'xiaohuangji', 'zhidao', 'weibo400w', 'qingyun11w', 'ptt', 'doubangroup']
+single_turn = ['ECG', 'zhihu', 'xiaohuangji', 'zhidao', 'weibo400w', 'qingyun', 'ptt', 'doubangroup']
 multi_turn = ['kgdialog', 'kdconv', 'zh50w', 'douban300w']
 
 def parse_args():
@@ -131,8 +131,8 @@ if __name__ == "__main__":
     args = vars(args)
     if args['mode'] == 'insert':
         # collect_samples_qq('retrieval_database')
-        # collect_samples_qq('retrieval_database')
-        collect_samples_qq_zh50w('zh50w_database')
+        collect_samples_qq('retrieval_database')
+        # collect_samples_qq_zh50w('zh50w_database')
     elif args['mode'] == 'generative':
         # train, test mode (99:1), without dev
         # prepare the generative dataset

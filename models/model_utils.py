@@ -1,5 +1,61 @@
 from .header import *
 
+# ========== ownthink knowledge graph utils ========== #
+class OwnThinkKG:
+    
+    def __init__(self):
+        self.s = requests.session()
+        self.url = 'https://api.ownthink.com/kg/knowledge?entity='
+        
+    def construct(self, entity):
+        return f'{self.url}{entity}'
+    
+    def get(self, entity):
+        p = self.s.get(self.construct(entity)).json()
+        if type(p['data']) is not str and p['message'] == 'success' and len(p['data']) > 0:
+            return p['data']['avp']
+        else:
+            return None
+        
+    def next_entity(self, entity, random_=True, forbidden=-1):
+        d = self.get(entity)
+        if d:
+            pool = list(range(len(d)))
+            if forbidden in pool:
+                pool.remove(forbidden)
+            random_idx = random.choice(pool)
+            _, next_entity = d[random_idx]
+            return next_entity, random_idx
+        else:
+            return None, None
+        
+    def sample_route(self, entity, length_=5, size=5):
+        '''bfs'''
+        queue, head, current, flag = [(entity, 0, -1)], 0, entity, False
+        entities, rest = set([entity]), []
+        while flag is False:
+            node, length, _ = queue[head]
+            candidates = self.get(node)
+            if candidates is None:
+                continue
+            random.shuffle(candidates)
+            for _, entity in candidates:
+                if entity in entities:
+                    continue
+                queue.append((entity, length + 1, head))
+                if length + 1 == length_:
+                    # collect
+                    p, idx = [entity], head
+                    while idx != -1:
+                        entity_, _, idx = queue[idx]
+                        p.append(entity_)
+                    rest.append(p)
+                if len(rest) == size:
+                    flag = True
+                entities.add(entity)
+            head += 1
+        return rest
+
 # ========== utils for GPT2V2RL and GPT2V2 ==========
 class Memory:
     def __init__(self):

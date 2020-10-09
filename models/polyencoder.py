@@ -36,12 +36,10 @@ class BertEmbedding(nn.Module):
             raise Exception(f'[!] Unknow squeeze strategy {self.squeeze_strategy}')
         return rest
     
-class BERTCrossAttention(nn.Module):
-    
-    '''same to the bertretrieval model'''
+class PolyEncoder(nn.Module):
     
     def __init__(self, dropout=0.3):
-        super(BERTCrossAttention, self).__init__()
+        super(PolyEncoder, self).__init__()
         self.model = BertEmbedding(squeeze_strategy='first')
         self.proj = nn.Linear(768, 2)
         self.dropout = nn.Dropout(p=dropout)
@@ -96,10 +94,10 @@ class BERTBiEncoder(nn.Module):
         dot_product = F.softmax(dot_product, dim=-1)
         return dot_product
     
-class BERTCrossAttentionAgent(RetrievalBaseAgent):
+class PolyEncoderAgent(RetrievalBaseAgent):
     
     def __init__(self, multi_gpu, run_mode='train', local_rank=0, kb=True):
-        super(BERTCrossAttentionAgent, self).__init__(kb=kb)
+        super(PolyEncoderAgent, self).__init__(kb=kb)
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(',')))) 
         except:
@@ -156,14 +154,14 @@ class BERTCrossAttentionAgent(RetrievalBaseAgent):
             total_acc += acc
             batch_num += 1
             
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Loss', total_loss/batch_num, idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunLoss', loss.item(), idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Acc', total_acc/batch_num, idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunAcc', acc, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Acc', total_acc/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', acc, idx)
 
             pbar.set_description(f'[!] loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}; acc: {round(acc, 4)}|{round(total_acc/batch_num, 4)}')
-        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Loss', total_loss/batch_num, idx_)
-        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Acc', total_acc/batch_num, idx_)
+        recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
+        recoder.add_scalar(f'train-whole/Acc', total_acc/batch_num, idx_)
         return round(total_loss / batch_num, 4)
     
     @torch.no_grad()

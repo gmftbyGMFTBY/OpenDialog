@@ -199,39 +199,6 @@ def bert_ir_dis_train_collate_fn(batch):
         cxt, label = cxt.cuda(), label.cuda()
     return cxt, label
 
-def bert_ir_train_collate_fn(batch):
-    pad = 0
-    cxt, token_type_ids, label = [], [], []
-    for i in batch:
-        cxt.append(i[0])
-        token_type_ids.append(i[1])
-        label.append(i[2])
-    # shuffle
-    random_idx = list(range(len(cxt)))
-    random.shuffle(random_idx)
-    cxt = pad_sequence(cxt, batch_first=True, padding_value=pad)    # [batch, seq]
-    token_type_ids = pad_sequence(token_type_ids, batch_first=True, padding_value=pad)
-    cxt = cxt[random_idx]
-    token_type_ids = token_type_ids[random_idx]
-    label = torch.tensor(label, dtype=torch.long)    # [batch]
-    label = label[random_idx]
-    
-    if torch.cuda.is_available():
-        cxt, token_type_ids, label = cxt.cuda(), token_type_ids.cuda(), label.cuda()
-    return cxt, token_type_ids, label
-
-def bert_ir_test_collate_fn(batch):
-    pad = 0
-    cxt, label = [], []
-    for i in batch:
-        cxt.extend(i[0])
-        label.extend(i[1])
-    cxt = pad_sequence(cxt, batch_first=True, padding_value=pad)    # [10*batch, seq]
-    label = torch.tensor(label, dtype=torch.long)    # [10*batch]
-    if torch.cuda.is_available():
-        cxt, label = cxt.cuda(), label.cuda()
-    return cxt, label
-
 def pone_test_collate_fn(batch):
     ctx, res, a = [], [], []
     for i in batch:

@@ -934,39 +934,21 @@ class BERTIRBIDataset(Dataset):
 class BERTIRDataset(Dataset):
 
     '''
-    BERT IR Dataset
+    BERT IR Dataset Chinese
     1. train and dev mode only need the binary classification
     2. test mode needs to consider about the measurement
-    
-    Aspects:
-    1. fluency
-    2. coherence
-    3. diversity
-    4. naturalness: 
-        * maybe the BM25 model is used for selecting the topic-close but unnatural response for the given context (intuitively, the BM25 retrieval-based dialog systems always unnatural for the given context, so maybe this operation is very helpful)
-        * the human annotation should be statistised to analyze whether the responses retrieved by the BM25 is the unnatural.
-        * naturalness may need the label filter algorithm to ignore the noises
-    5. relatedness
-    6. overall: coherence sampling with only 1 negative samples for training the aggration head. Overall may need the `naturalness` negative samples for training (harder negative samples is better).
     '''
 
-    def __init__(self, path, mode='train', src_min_length=20, tgt_min_length=15, 
-                 turn_size=3, max_len=300, samples=9, vocab_file='data/vocab/vocab_small',
-                 negative_aspect='overall', soft_label=False):
+    def __init__(self, path, mode='train', max_len=300, samples=9, negative_aspect='coherence'):
         self.mode = mode
         self.max_len = max_len 
-        self.soft_label = soft_label
-        # data = read_csv_data(path)
-        # data = read_text_data(path)
-        data = read_lccc_data(path, debug=False)
-        # context and response are all the negative samples 
+        data = read_text_data(path)
         responses = [i[1] for i in data]
-        # self.vocab = BertTokenizer(vocab_file=vocab_file)
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
-        self.pp_path = f'{os.path.splitext(path)[0]}_{negative_aspect}.pkl'
+        self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
+        self.pp_path = f'{os.path.splitext(path)[0]}_{negative_aspect}.pt'
         if os.path.exists(self.pp_path):
-            with open(self.pp_path, 'rb') as f:
-                self.data = pickle.load(f)
+            self.data = torch.load(self.pp_path)
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
         self.data = []
@@ -982,25 +964,25 @@ class BERTIRDataset(Dataset):
         
         if mode in ['train', 'dev']:
             for context, response in tqdm(d_):
-                context_id = self.vocab.encode(context)
-                token_type_ids = [1] * len(context_id)
-                for idx, r in enumerate(response):
-                    bundle = dict()
-                    rid = self.vocab.encode(r)
-                    bundle['context_id'] = context_id + rid[1:]
-                    bundle['token_type_id'] = token_type_ids + [0] * len(rid[1:])
-                    bundle['label'] = 1 if idx == 0 else 0
-                    self.data.append(bundle)
+                item = self.vocab.batch_encode_plus([context] + response, return_token_type_ids=True)
+                context_id, response_ids = item['input_ids'][0], item['input_ids'][1:]
+                for idx, rid in enumerate(response_ids):
+                    ids = context_id + rid[1:]
+                    tids = [0] * len(context_id) + [1] * (len(rid) - 1)
+                    self.data.append({
+                        'ids': ids,
+                        'tids': tids,
+                        'label': 1 if idx == 0 else 0,
+                    })
         else:
-            for item in tqdm(d_):
-                context, response, _ = item
-                context_id = self.vocab.encode(context)
-                res_ids = [self.vocab.encode(i) for i in response]
-                bundle = dict()
-                bundle['context_id'] = context_id
-                bundle['reply_id'] = res_ids
-                bundle['label'] = [1] + [0] * samples
-                self.data.append(bundle)
+            for context, responses in tqdm(d_):
+                item = self.vocab.batch_encode_plus([context] + response, return_token_type_ids=True)
+                context_id, response_ids = item['input_ids'][0], item['input_ids'][1:]
+                self.data.append({
+                    'cids': context_id,
+                    'rids': response_ids,
+                    'label': [1] + [0] * samples,
+                })
 
     def __len__(self):
         return len(self.data)
@@ -1008,18 +990,63 @@ class BERTIRDataset(Dataset):
     def __getitem__(self, i):
         bundle = self.data[i]
         if self.mode in ['train', 'dev']:
-            context_ids = torch.LongTensor(bundle['context_id'][-self.max_len:])
-            token_type_ids = torch.LongTensor(bundle['token_type_id'][-self.max_len:])
+            if len(bundle['ids']) > self.max_len:
+                cut_size = len(bundle['ids']) - self.max_len + 1    # ignore [CLS]
+                context_ids = torch.LongTensor([bundle['ids'][0]] + bundle['ids'][cut_size:])
+                token_type_ids = torch.LongTensor([bundle['tids'][0]] + bundle['tids'][cut_size:])
+            else:
+                context_ids = torch.LongTensor(bundle['ids'])
+                token_type_ids = torch.LongTensor(bundle['tids'])
+            return context_ids, token_type_ids, bundle['label'] 
         else:
-            ids = []
-            for i in range(len(bundle['reply_id'])):
-                p = bundle['context_id'] + bundle['reply_id'][i][1:]
-                ids.append(torch.LongTensor(p[-self.max_len:]))
-        return context_ids, token_type_ids, bundle['label'] 
+            ids, token_ids = [], []
+            for i in range(len(bundle['rids'])):
+                p = bundle['cids'] + bundle['rids'][i][1:]
+                tids = [0] * len(bundle['cids']) + [1] * (len(bundle['rids'][i]) - 1)
+                if len(p) > self.max_len:
+                    cut_size = len(p) - self.max_len + 1    # ignore [CLS]
+                    context_ids = torch.LongTensor([p[0]] + p[cut_size:])
+                    token_type_ids = torch.LongTensor([tids[0]] + tids[cut_size:])
+                else:
+                    context_ids = torch.LongTensor(p)
+                    token_type_ids = torch.LongTensor(tids)
+                ids.append(context_ids)
+                token_ids.append(token_type_ids)
+            return ids, token_ids, bundle['label']
     
+    def collate(self, batch):
+        if self.mode == 'train':
+            ids, token_type_ids, label = [], [], []
+            for i in batch:
+                ids.append(torch.LongTensor(i[0]))
+                token_type_ids.append(torch.LongTensor(i[1]))
+                label.append(i[2])
+            ids = pad_sequence(ids, batch_first=True, padding_value=self.pad)    # [batch, seq]
+            token_type_ids = pad_sequence(token_type_ids, batch_first=True, padding_value=self.pad)
+            attn_mask_index = ids.nonzero().tolist()
+            attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+            attn_mask = torch.zeros_like(ids)
+            attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+            label = torch.LongTensor(label)
+        else:
+            ids, token_type_ids, label = [], [], []
+            for i in batch:
+                ids.extend(torch.LongTensor(i[0]))
+                token_type_ids.extend(torch.LongTensor(i[1]))
+                label.extend(i[2])
+            ids = pad_sequence(ids, batch_first=True, padding_value=self.pad)    # [batch, seq]
+            token_type_ids = pad_sequence(token_type_ids, batch_first=True, padding_value=self.pad)
+            attn_mask_index = ids.nonzero().tolist()
+            attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+            attn_mask = torch.zeros_like(ids)
+            attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+            label = torch.LongTensor(label)
+        if torch.cuda.is_available():
+            ids, token_type_ids, attn_mask, label = ids.cuda(), token_type_ids.cuda(), attn_mask.cuda(), label.cuda()
+        return ids, token_type_ids, attn_mask, label
+            
     def save_pickle(self):
-        with open(self.pp_path, 'wb') as f:
-            pickle.dump(self.data, f)
+        torch.save(self.data, self.pp_path)
         print(f'[!] save dataset into {self.pp_path}')
         
 class BERTIRDISDataset(Dataset):

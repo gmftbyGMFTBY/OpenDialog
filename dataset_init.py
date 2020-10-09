@@ -260,15 +260,15 @@ def load_bert_irbi_dataset(args):
     return iter_
 
 def load_bert_ir_dataset(args):
-    # path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-    path = f'data/{args["dataset"]}/LCCC-base.json'
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    # path = f'data/{args["dataset"]}/LCCC-base.json'
     if args['mode'] in ['train', 'dev']:
-        data = BERTIRDataset(path, mode=args['mode'], samples=1, negative_aspect='coherence')
+        data = BERTIRDataset(path, mode=args['mode'], samples=1, max_len=args['src_len_size'], negative_aspect='coherence')
         train_sampler = torch.utils.data.distributed.DistributedSampler(data)
-        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=bert_ir_train_collate_fn, sampler=train_sampler)
+        iter_ = DataLoader(data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate, sampler=train_sampler)
     else:
-        data = BERTIRDataset(path, mode=args['mode'], samples=9, negative_aspect='hard')
-        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=bert_ir_test_collate_fn)
+        data = BERTIRDataset(path, mode=args['mode'], samples=9, max_len=args['src_len_size'], negative_aspect='coherence')
+        iter_ = DataLoader(data, shuffle=True, batch_size=args['batch_size'], collate_fn=data.collate)
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     return iter_
