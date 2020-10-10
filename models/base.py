@@ -147,21 +147,44 @@ class RetrievalBaseAgent:
     def test_model(self, test_iter, path):
         raise NotImplementedError
 
-    def process_utterances(self, topic, msgs):
+    def process_utterances(self, topic, msgs, max_len=0):
         '''Process the utterances searched by Elasticsearch; input_ids/token_type_ids/attn_mask'''
-        utterances_ = self.searcher.search(topic, msgs, samples=self.args['talk_samples'])
+        utterances_ = self.searcher.search(msgs, samples=self.args['talk_samples'], topic=topic)
         utterances_ = [i['response'] for i in utterances_]
         # remove the utterances that in the self.history
         utterances_ = list(set(utterances_) - set(self.history))
-        utterances = [f'{msgs} [SEP] {i}' for i in utterances_]
-        # 512 length limitations for BERT Module
-        ids = [torch.LongTensor(self.vocab.encode(i)[-512:]) for i in utterances_]
-        ids = pad_sequence(ids, batch_first=True, padding_value=self.args['pad'])
+        
+        # construct inpt_ids, token_type_ids, attn_mask
+        inpt_ids = self.vocab.batch_encode_plus([msgs] + utterances_)['input_ids']
+        context_inpt_ids, responses_inpt_ids = inpt_ids[0], inpt_ids[1:]
+        context_token_type_ids = [0] * len(context_inpt_ids)
+        responses_token_type_ids = [[1] * len(i) for i in responses_inpt_ids]
+        
+        # length limitation
+        collection = []
+        for r1, r2 in zip(responses_inpt_ids, responses_token_type_ids):
+            p1, p2 = context_inpt_ids + r1[1:], context_token_type_ids + r2[1:]
+            if len(p1) > max_len:
+                cut_size = len(p1) - max_len + 1
+                p1 = torch.LongTensor([p1[0]] + p1[cut_size:])
+                p2 = torch.LongTensor([p2[0]] + p2[cut_size:])
+            collection.append((p1, p2))
+            
+        inpt_ids = [torch.LongTensor(i[0]) for i in collection]
+        token_type_ids = [torch.LongTensor(i[1]) for i in collection]
+        
+        inpt_ids = pad_sequence(inpt_ids, batch_first=True, padding_value=self.args['pad'])
+        token_type_ids = pad_sequence(token_type_ids, batch_first=True, padding_value=self.args['pad'])
+        attn_mask_index = inpt_ids.nonzero().tolist()
+        attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+        attn_mask = torch.zeros_like(inpt_ids)
+        attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+        
         if torch.cuda.is_available():
-            ids = ids.cuda()
-        return utterances_, ids
+            inpt_ids, token_type_ids, attn_mask = inpt_ids.cuda(), token_type_ids.cuda(), attn_mask.cuda()
+        return utterances_, inpt_ids, token_type_ids, attn_mask
 
-    def talk(self, topic, msgs):
+    def talk(self, msgs, topic=None):
         '''
         topic: topic of the conversation
         msgs: a string of the conversation context

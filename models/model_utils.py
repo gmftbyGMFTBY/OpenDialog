@@ -6,12 +6,14 @@ class OwnThinkKG:
     def __init__(self):
         self.s = requests.session()
         self.url = 'https://api.ownthink.com/kg/knowledge?entity='
+        self.special_tokens = set('。，|；“”‘’！~·、：=-+#￥%……&*（）【】@？.,?[]{}()!$^`";:')
         
     def construct(self, entity):
         return f'{self.url}{entity}'
     
     def get(self, entity):
         p = self.s.get(self.construct(entity)).json()
+        time.sleep(0.2)
         if type(p['data']) is not str and p['message'] == 'success' and len(p['data']) > 0:
             return p['data']['avp']
         else:
@@ -29,30 +31,47 @@ class OwnThinkKG:
         else:
             return None, None
         
-    def sample_route(self, entity, length_=5, size=5):
+    def node_judge(self, entity):
+        dig = bool(re.search(r'\d', entity))
+        length = True if len(entity) > 5 or len(entity) < 2 else False 
+        alpha = entity.encode().isalpha()    # chinese need this
+        special = False
+        for char in entity:
+            if char in self.special_tokens:
+                special = True
+                break
+        return dig or length or alpha or special
+    
+    def find_upper(self, entity, queue, idx):
+        while idx != -1:
+            entity_, _, idx = queue[idx]
+            if entity == entity_:
+                return True
+        return False
+        
+    def sample_route(self, entity, length_=4, size=1):
         '''bfs'''
-        queue, head, current, flag = [(entity, 0, -1)], 0, entity, False
-        entities, rest = set([entity]), []
-        while flag is False:
+        queue, head, rest, flag = [(entity, 1, -1)], 0, [], False
+        while flag is False and head < len(queue):
             node, length, _ = queue[head]
             candidates = self.get(node)
             if candidates is None:
+                head += 1
                 continue
             random.shuffle(candidates)
             for _, entity in candidates:
-                if entity in entities:
+                if self.find_upper(entity, queue, head) or self.node_judge(entity):
                     continue
                 queue.append((entity, length + 1, head))
                 if length + 1 == length_:
-                    # collect
                     p, idx = [entity], head
                     while idx != -1:
                         entity_, _, idx = queue[idx]
                         p.append(entity_)
-                    rest.append(p)
+                    rest.append(list(reversed(p)))
                 if len(rest) == size:
                     flag = True
-                entities.add(entity)
+                    break
             head += 1
         return rest
 
@@ -285,6 +304,8 @@ class KBKWParser(KWParser):
         return list(kw)
 
 class ESUtils:
+    
+    '''write the query-response pairs into the elasticsearch'''
 
     def __init__(self, index_name, create_index=False):
         self.es = Elasticsearch(http_auth=('elastic', 'elastic123'))
@@ -320,6 +341,8 @@ class ESUtils:
         print(f'[!] retrieval database size: {self.es.count(index=self.index)["count"]}')
 
 class ESChat:
+    
+    '''basic elasticsearch searcher'''
 
     def __init__(self, index_name, kb=True):
         self.es = Elasticsearch(http_auth=('elastic', 'elastic123'))
@@ -328,14 +351,13 @@ class ESChat:
     def search(self, query, samples=10, topic=None):
         '''
         query is the string, which contains the utterances of the conversation context.
-        1. topic msg
-        2. key word msg
-        cantenate with the space operator
+        1. topic is a list contains the topic words
+        2. query utterance msg
         
-        # 'context': query is Q-Q matching
-        # 'response': query is Q-A matching, which seems better
+        context: query is Q-Q matching
+        response: query is Q-A matching, which seems better
         '''
-        if topic is None:
+        if not topic:
             dsl = {
                 'query': {
                     'match': {
@@ -345,13 +367,21 @@ class ESChat:
             }
         else:
             # https://www.elastic.co/guide/cn/elasticsearch/guide/current/multi-query-strings.html
+            # subitem = [{'match': {'response': i}} for i in topic]
+            # subitem.append({'match': {'response': query}})
+            # dsl = {
+            #     'query': {
+            #         'bool': {
+            #             "should": subitem
+            #         }
+            #     }
+            # }
+            subitem = [{"match": {"response": {"query": i, 'boost': 2}}} for i in topic]
+            subitem.append({'match': {'response': {'query': query, 'boost': 1}}})
             dsl = {
                 'query': {
                     'bool': {
-                        "should": [
-                            {"match": {"response": topic}},
-                            {"match": {"response": query}}
-                        ]
+                        "should": subitem
                     }
                 }
             }

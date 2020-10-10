@@ -4,7 +4,7 @@ from models import *
 import sys
 
 '''
-API for SMP-MCC 2020 and wechat
+API for wechat
 '''
 
 app = Flask(__name__)
@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 args = {}
 args['model'] = sys.argv[1]
 args['multi_gpu'] = sys.argv[2]
-logger.info(f'[!] begin to init the {args["model"]} agent on {args["multi_gpu"]} GPU')
+logger.info(f'[!] begin to init the {args["model"]} agent on GPU {args["multi_gpu"]}')
 if args['model'] == 'bertretrieval':
-    agent = BERTRetrievalAgent(args['multi_gpu'], kb=False)
+    agent = BERTRetrievalAgent(args['multi_gpu'], run_mode='test', kb=False)
     agent.load_model(f'ckpt/zh50w/bertretrieval/best.pt')
 elif args['model'] == 'bertmc':
     # [model_type]: bertmc -> mc; bertmcf -> mcf

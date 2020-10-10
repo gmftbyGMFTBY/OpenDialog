@@ -31,6 +31,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             'samples': 10,
             'multi_gpu': self.gpu_ids,
             'talk_samples': 256,
+            'max_len': 256,
             'vocab_file': 'bert-base-chinese',
             'pad': 0,
             'model': 'bert-base-chinese',
@@ -94,38 +95,41 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         recoder.add_scalar(f'train-whole/Acc', correct/s, idx_)
         return round(total_loss / batch_num, 4)
 
+    @torch.no_grad()
     def test_model(self, test_iter, path):
         self.model.eval()
         total_loss, batch_num = 0, 0
         pbar = tqdm(test_iter)
         rest = []
-        with torch.no_grad():
-            for idx, batch in enumerate(pbar):
-                cid, token_type_ids, attn_mask, label = batch
-                output = self.model(cid, token_type_ids, attn_mask)    # [batch, 2]
-                loss = self.criterion(output, label.view(-1))
-                total_loss += loss.item()
-                batch_num += 1
-                output = F.softmax(output, dim=-1)[:, 1]    # [batch]
-                preds = [i.tolist() for i in torch.split(output, self.args['samples'])]
-                labels = [i.tolist() for i in torch.split(label, self.args['samples'])]
-                for label, pred in zip(labels, preds):
-                    pred = np.argsort(pred, axis=0)[::-1]
-                    rest.append(([0], pred.tolist()))
+        for idx, batch in enumerate(pbar):
+            cid, token_type_ids, attn_mask, label = batch
+            output = self.model(cid, token_type_ids, attn_mask)    # [batch, 2]
+            loss = self.criterion(output, label.view(-1))
+            total_loss += loss.item()
+            batch_num += 1
+            output = F.softmax(output, dim=-1)[:, 1]    # [batch]
+            preds = [i.tolist() for i in torch.split(output, self.args['samples'])]
+            labels = [i.tolist() for i in torch.split(label, self.args['samples'])]
+            for label, pred in zip(labels, preds):
+                pred = np.argsort(pred, axis=0)[::-1]
+                rest.append(([0], pred.tolist()))
         print(f'[!] test loss: {round(total_loss/batch_num, 4)}')
         p_1, r2_1, r10_1, r10_2, r10_5, MAP, MRR = cal_ir_metric(rest)
         print(f'[TEST] P@1: {p_1}; R2@1: {r2_1}; R10@1: {r10_1}; R10@2: {r10_2}; R10@5: {r10_5}; MAP: {MAP}; MRR: {MRR}')
         return round(total_loss/batch_num, 4)
 
-    def talk(self, topic, msgs):
+    @torch.no_grad()
+    def talk(self, msgs, topic=None):
         self.model.eval()
-        with torch.no_grad():
-            utterances_, ids = self.process_utterances(topic, msgs)
-            output = self.model(ids)    # [B, 2]
-            output = F.softmax(output, dim=-1)[:, 1]    # [B]
-            item = torch.argmax(output).item()
-            msg = utterances_[item]
-            return msg
+        utterances_, inpt_ids, token_type_ids, attn_mask = self.process_utterances(
+            topic, msgs, max_len=self.args['max_len']
+        )
+        # prepare the data input
+        output = self.model(inpt_ids, token_type_ids, attn_mask)    # [B, 2]
+        output = F.softmax(output, dim=-1)[:, 1]    # [B]
+        item = torch.argmax(output).item()
+        msg = utterances_[item]
+        return msg
 
     def reverse_search(self, ctx, ctx_, res):
         with torch.no_grad():
