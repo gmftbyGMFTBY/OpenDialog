@@ -187,7 +187,7 @@ def reply_text(to_user, from_user, content):
     return response
 
 def init_mongodb(dbname, table_name):
-    client = pymongo.MongoClient('mongodb://localhost:27001/')
+    client = pymongo.MongoClient('mongodb://localhost:27016/')
     table = client[dbname][table_name]
     return table 
 

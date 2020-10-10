@@ -193,7 +193,6 @@ class RetrievalBaseAgent:
 
     def get_res(self, data):
         '''
-        SMP-MCC 2020
         data = {
             "group_id": group_id,
             "topic": topic,
@@ -209,7 +208,7 @@ class RetrievalBaseAgent:
         }
         '''
         msgs = [i['msg'] for i in data['msgs']]
-        msgs = '[SEP]'.join(msgs)
+        msgs = ' [SEP] '.join(msgs)
         topic = data['topic'] if 'topic' in data else None
         res = self.talk(msgs, topic=topic)
         self.history.append(res)

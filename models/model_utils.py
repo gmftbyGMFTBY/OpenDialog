@@ -357,6 +357,7 @@ class ESChat:
         context: query is Q-Q matching
         response: query is Q-A matching, which seems better
         '''
+        query = query.replace('[SEP]', '')    # Need to replace the [SEP] berfore the searching
         if not topic:
             dsl = {
                 'query': {
