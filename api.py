@@ -5,6 +5,7 @@ from api_utils import *
 '''API for wechat'''
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.urandom(24)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,15 @@ def wechat_api():
             table.delete_many({})
             logger.info(f'[!] delete all the utterances in the database')
             return reply_text(fromUser, toUser, '#clear database over')
+        elif content.startswith('#kg'):
+            # kg-driven chat
+            try:
+                kg_path = eval(content[3:])
+            except:
+                return reply_text(fromUser, toUser, f'{content} error')
+            session['kg_path'] = kg_path
+            session['node'] = 0
+            args['session'] = session
         
         table.insert_one({
             'toUser': toUser,
@@ -91,7 +101,7 @@ def wechat_api():
         table.insert_one({
             'toUser': fromUser,
             'fromUser': toUser,
-            'utterance': reply, 
+            'utterance': reply,
             'id': db_table_counter(table),
         })
         if args['verbose']:

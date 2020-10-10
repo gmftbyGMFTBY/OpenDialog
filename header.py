@@ -29,7 +29,7 @@ import logging
 import gensim
 import xml.etree.ElementTree as ET
 from copy import deepcopy
-from flask import Flask, jsonify, request, make_response
+from flask import Flask, jsonify, request, make_response, session
 from bert_serving.client import BertClient
 import ipdb
 from transformers.modeling_gpt2 import GPT2Config, GPT2LMHeadModel

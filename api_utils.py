@@ -5,6 +5,7 @@ def parser_args_api():
     '''chat mode:
     1. mode 0: single-turn chat
     2. mode 1: multi-turn chat
+    3. mode 2: knowledge driven multi-turn chat
     '''
     parser = argparse.ArgumentParser(description='flask chatting mode')
     parser.add_argument('--model', type=str, default='bertretrieval')
@@ -87,8 +88,8 @@ def normal_chat_multi_turn(agent, content, topic=None, args=None):
     args['content'] = ' [SEP] '.join(previous_utterances)
     return agent.get_res(data)
 
-def kg_driven_multi_turn(agent, content, topic=None, args=None):
-    '''use yield to return the temporal response; only return when the session is over'''
+def kg_driven_chat_multi_turn(agent, content, topic=None, args=None):
     # 1) generate the topic path
     # 2) kg-driven multi-turn dialog
-    pass
+    print(args)
+    return None
