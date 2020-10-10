@@ -84,9 +84,9 @@ def wechat_api():
                 kg_path = eval(content[3:])
             except:
                 return reply_text(fromUser, toUser, f'{content} error')
-            session['kg_path'] = kg_path
-            session['node'] = 0
-            args['session'] = session
+            session['kg_path'], session['node'] = kg_path, 0
+            args['session'], args['chat_mode'] = session, 2
+            return reply_text(fromUser, toUser, f"#set the knowledge path {kg_path}")
         
         table.insert_one({
             'toUser': toUser,

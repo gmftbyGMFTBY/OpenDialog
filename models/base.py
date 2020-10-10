@@ -194,12 +194,12 @@ class RetrievalBaseAgent:
     def get_res(self, data):
         '''
         data = {
-            "group_id": group_id,
+            "kg_path": group_id,
             "topic": topic,
-            "robot_id": robot_id
+            "node": robot_id
             "msgs": [
                 {
-                    'from_id': robot_id,
+                    'fromUser': robot_id,
                     'msg': msg,
                     'timestamp': timestamp
                 },

@@ -65,6 +65,8 @@ def chat(agent, content, args=None, logger=None):
         return normal_chat_single_turn(agent, content, args=args)
     elif args['chat_mode'] == 1:
         return normal_chat_multi_turn(agent, content, args=args)
+    elif args['chat_mode'] == 2:
+        return kg_driven_chat_multi_turn(agent, content, args=args)
     else:
         print(f'[!] Unknow chat mode {args["chat_mode"]}')
         return None
@@ -89,7 +91,14 @@ def normal_chat_multi_turn(agent, content, topic=None, args=None):
     return agent.get_res(data)
 
 def kg_driven_chat_multi_turn(agent, content, topic=None, args=None):
-    # 1) generate the topic path
-    # 2) kg-driven multi-turn dialog
-    print(args)
-    return None
+    query = {"$or": [{"fromUser": args["fromUser"]}, {"toUser": args["fromUser"]}]}
+    previous_utterances = [(i['fromUser'], i['utterance']) for i in args['table'].find(query)][-args['multi_turn_size']:]
+    content_list = [{'msg': i[1], 'fromUser': i[0]} for i in previous_utterances]
+    data = {
+        'topic': topic,
+        'msgs': content_list,
+        'path': args['session'].get('kg_path'),
+        'current_node': args['session'].get('node'),
+    }
+    args['content'] = ' [SEP] '.join(previous_utterances)
+    return agent.get_res(data)
