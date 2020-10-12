@@ -166,8 +166,7 @@ class RetrievalBaseAgent:
             p1, p2 = context_inpt_ids + r1[1:], context_token_type_ids + r2[1:]
             if len(p1) > max_len:
                 cut_size = len(p1) - max_len + 1
-                p1 = torch.LongTensor([p1[0]] + p1[cut_size:])
-                p2 = torch.LongTensor([p2[0]] + p2[cut_size:])
+                p1, p2 = [p1[0]] + p1[cut_size:], [p2[0]] + p2[cut_size:]
             collection.append((p1, p2))
             
         inpt_ids = [torch.LongTensor(i[0]) for i in collection]

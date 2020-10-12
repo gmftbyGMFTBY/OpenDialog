@@ -162,6 +162,179 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
             indexs = torch.argsort(output, descending=True)[:topk]
             msgs = [utterances_[index] for index in indexs]
             return msgs
+        
+class BERTRetrievalLoopAgent:
+    
+    '''Knowledge Graph Driven Retrieval Dialog System Loop Agent'''
+    
+    def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True):
+        super(BERTRetrievalLoopAgent, self).__init__()
+        self.agent = BERTRetrievalKGAgent(multi_gpu, run_mode='test', lang='zh', kb=True, local_rank=0)
+        self.env = BERTRetrievalEnvAgent(multi_gpu, run_mode='test', lang='zh', kb=True, local_rank=0)
+        
+    def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
+        pass
+    
+    @torch.no_grad()
+    def test_model(self):
+        pass
+        
+class BERTRetrievalEnvAgent(BERTRetrievalAgent):
+    
+    '''Env conversation agent which doesn"t know the kg graph but can return the reward and the next observation;
+    the model parameters is different from the BERTRetrievalKGAgent'''
+    
+    def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True, local_rank=0):
+        super(BERTRetrievalEnvAgent, self).__init__(multi_gpu, run_mode=run_mode, lang=lang, kb=kb, local_rank=local_rank)
+        self.args['done_reward'], self.args['smooth_penalty'], self.args['step_penalty'] = 100, 20, 5
+        
+    def wrap_utterances(self, context, max_len=0):
+        '''context is a list of string, which contains the dialog history'''
+        context, response =  ' [SEP] '.join(context[:-1]), context[-1]
+        # construct inpt_ids, token_type_ids, attn_mask
+        inpt_ids = self.vocab.batch_encode_plus([context, response])['input_ids']
+        context_inpt_ids, responses_inpt_ids = inpt_ids[0], inpt_ids[1]
+        context_token_type_ids = [0] * len(context_inpt_ids)
+        responses_token_type_ids = [1] * len(responses_inpt_ids)
+        
+        # length limitation
+        inpt_ids, token_type_ids = context_inpt_ids + responses_inpt_ids[1:], context_token_type_ids + responses_token_type_ids[1:]
+        if len(p1) > max_len:
+            cut_size = len(p1) - max_len + 1
+            inpt_ids = torch.LongTensor([inpt_ids[0]] + inpt_ids[cut_size:])
+            token_type_ids = torch.LongTensor([token_type_ids[0]] + token_type_ids[cut_size:])
+        else:
+            inpt_ids = torch.LongTensor(inpt_ids)
+            token_type_ids = torch.LongTensor(token_type_ids)
+        attn_mask = torch.ones_like(inpt_ids)
+        
+        if torch.cuda.is_available():
+            inpt_ids, token_type_ids, attn_mask = inpt_ids.cuda(), token_type_ids.cuda(), attn_mask.cuda()
+        return inpt_ids, token_type_ids, attn_mask
+        
+    @torch.no_grad()
+    def get_reward(self, context, done=False, steps=0):
+        '''construct the reward'''
+        self.model.eval()
+        if done:
+            return self.args['done_reward'] - steps * self.args['step_penalty']
+        else:
+            output = self.model(*self.wrap_utterances(context, max_len=self.args['max_len']))    # [2]
+            output = F.softmax(output, dim=-1)[0]
+            reward = -self.args['smooth_penalty'] * output.item()
+            return reward 
+        
+    def get_res(self, data):
+        '''return reward and next utterances for the BERTRetrievalEnvAgent'''
+        msgs = [i['msg'] for i in data['msgs']]
+        msgs = ' [SEP] '.join(msgs)
+        topic = data['topic'] if 'topic' in data else None
+        res = self.talk(msgs, topic=topic)
+        self.history.append(res)
+        return res
+        
+class BERTRetrievalKGAgent(BERTRetrievalAgent):
+    
+    '''fix the talk function for BERTRetrievalAgent; the Agent knows the whole knowledge graph path; but the other one doesn"t;
+    CAREFUL: reset_path function must be called before each conversation session.
+    1) Move the node first
+    2) Based on the current node (after moving), choosing the utterance as the response
+    
+    :kg_method: [greedy, mixture, rl]
+        greedy: ACL 2019 Target-Guided Open-Domain Conversation
+    '''
+    
+    def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True, local_rank=0):
+        super(BERTRetrievalKGAgent, self).__init__(multi_gpu, run_mode=run_mode, lang=lang, kb=kb, local_rank=local_rank)
+        self.topic_history = []
+        self.word2vec = gensim.models.KeyedVectors.load_word2vec_format(
+            'data/chinese_w2v.txt', binary=False
+        )
+        print(f'[!] load the chinese word vectors over')
+        self.args['topic_topn'] = 20
+        
+    def reset(self, target, init_node, method='greedy'):
+        if method not in ['greedy', 'rl']:
+            raise Exception(f'[!] Unknow kg moving method {method}')
+        self.args['target'], self.args['current_node'], self.args['kg_method'] = target, init_node, method
+        self.topic_history = [init_node]
+        self.history = []
+        print(f'[! Reset the KG target] target: {target}; current node: {init_node}; method: {method}')
+        
+    def move_on_kg(self, next_node):
+        '''judge whether meet the end'''
+        self.args['current_node'] = next_node
+        done = True if next_node == self.args['target'] else False
+        return done
+        
+    @torch.no_grad()
+    def talk(self, msgs):
+        ''':topic: means the current topic node in the knowledge graph path.'''
+        self.model.eval()
+        # 1) inpt the topic information for the coarse filter in elasticsearch
+        utterances, inpt_ids, token_type_ids, attn_mask = self.process_utterances(
+            self.arg['current_node'], msgs, max_len=self.args['max_len'],
+        )
+        # 2) neural ranking with the topic information
+        output = self.model(inpt_ids, token_type_ids, attn_mask)    # [B, 2]
+        output = F.softmax(output, dim=-1)[:, 1]    # [B]
+        item = torch.argmax(output).item()
+        msg = utterances[item]
+        return msg
+    
+    def choose_candidate_topic(self):
+        candidates = self.word2vec.most_similar(self.args['current_node'], topn=self.args['topic_topn'])
+        dis2target = []
+        for word, _ in candidates:
+            dis2target.append(
+                (word, self.word2vec.similarity(word, self.args['target']))
+            )
+        return dis2target
+    
+    def obtain_keywords(self, utterance):
+        '''select the keyword that most similar to the current_node as the keyword in the human response'''
+        keywords = analyse.extract_tags(utterance)
+        dis2node = [(i, self.word2vec.similarity(self.args['current_node'], i)) for i in keywords]
+        keyword = sorted(dis2node, key=lambda x: x[1])[-1][0]
+        return keyword
+    
+    def get_res(self, data):
+        '''
+        data = {
+            "msgs": [
+                {
+                    'fromUser': robot_id,
+                    'msg': msg,
+                    'timestamp': timestamp
+                },
+                ...
+            ]
+        }
+        ''' 
+        if len(self.topic_history) > 1:
+            # 1) move
+            last_response = data['msgs'][-1]
+            user_keyword = self.obtain_keywords(last_response)
+            self.topic_history.append(user_keyword)
+            self.history.append(last_response)
+            self.args['current_node'] = user_keyword
+            
+            candidates = self.choose_candidate_topic()
+            if self.args['kg_method'] == 'greedy':
+                next_node = sorted(candidates, key=lambda x: x[1])[-1][0]
+            done = self.move_on_kg(next_node)
+            self.topic_history.append(next_node)
+            
+            # 2) obtain the responses based on the next_node
+            msgs = [i['msg'] for i in data['msgs']]
+            msgs = ' [SEP] '.join(msgs)
+            res = self.talk(msgs)
+            self.history.append(res)
+        else:
+            # the first round doesn't to move, just randomly choose the coherent initial utterance
+            done = False
+            res = self.searcher.talk('', topic=self.args['current_node'])
+        return res, done
     
 class BERTRetrievalDISAgent(RetrievalBaseAgent):
     

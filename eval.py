@@ -73,7 +73,7 @@ def cal_generative_metric(path, batch_size=16, lang='zh'):
     # embedding-based (average, extrema, greedy), using the character instead of the word
     # word embeddings from: https://github.com/Embedding/Chinese-Word-Vectors
     if lang == 'zh':
-        w2v = load_w2v('data/chinese_w2v')
+        w2v = gensim.models.KeyedVectors.load_word2vec_format('data/chinese_w2v.txt', binary=False)
     else:
         w2v = gensim.models.KeyedVectors.load_word2vec_format('data/english_w2v.bin', binary=True)
         print(f'[!] load english word2vec by gensim; GoogleNews WordVector: data/vocab/english_w2v.bin')

@@ -38,6 +38,7 @@ agent_map = {
     'gpt2lm': GPT2Agent,
     'multigpt2': MultiGPT2Dataset,
     'bertretrieval': BERTRetrievalAgent,
+    'bertretrievalkg': BERTRetrievalKGAgent,
     'bertretrieval_multiview': BERTRetrievalAgent,
     'bertretrieval_cl': BERTRetrievalCLAgent,
     'bertlogic': BERTRetrievalAgent,
@@ -59,6 +60,7 @@ agent_map = {
 model_parameters = {
     'DualLSTM': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang'}],
     'bertretrieval': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank'}],
+    'bertretrievalkg': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank'}],
     'lccc': [('multi_gpu',), {'run_mode': 'mode'}],
     'bertmc': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang', 'model_type': 'mc'}],
     'bertmc': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang', 'model_type': 'mcf'}],

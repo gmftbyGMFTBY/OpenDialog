@@ -20,6 +20,9 @@ elif [ $mode = 'eda' ]; then
 elif [ $mode = 'keywords' ]; then
     # generate the keywords graph
     python process_data.py --mode keywords --data zh50w
+elif [ $mode = 'kg' ]; then
+    # sample the kg path for the kg driven open-domain dialog systems
+    python process_data.py --mode kg --data kg
 else
     echo '[!] run.sh script get unkown mode [ $mode ] for running'
 fi
