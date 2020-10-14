@@ -187,6 +187,11 @@ class BERTRetrievalEnvAgent(BERTRetrievalAgent):
     def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True, local_rank=0):
         super(BERTRetrievalEnvAgent, self).__init__(multi_gpu, run_mode=run_mode, lang=lang, kb=kb, local_rank=local_rank)
         self.args['done_reward'], self.args['smooth_penalty'], self.args['step_penalty'] = 100, 20, 5
+        self.word2vec = gensim.models.KeyedVectors.load_word2vec_format(
+            'data/chinese_w2v.txt', binary=False,
+        )
+        print(f'[!] load the chinese word vectors over')
+        self.args['talk_sample'] = 64
         
     def wrap_utterances(self, context, max_len=0):
         '''context is a list of string, which contains the dialog history'''
@@ -211,6 +216,19 @@ class BERTRetrievalEnvAgent(BERTRetrievalAgent):
         if torch.cuda.is_available():
             inpt_ids, token_type_ids, attn_mask = inpt_ids.cuda(), token_type_ids.cuda(), attn_mask.cuda()
         return inpt_ids, token_type_ids, attn_mask
+    
+    @torch.no_grad()
+    def talk(self, msgs, topic=None):
+        self.model.eval()
+        utterances_, inpt_ids, token_type_ids, attn_mask = self.process_utterances(
+            topic, msgs, max_len=self.args['max_len'], filter_=True,
+        )
+        # prepare the data input
+        output = self.model(inpt_ids, token_type_ids, attn_mask)    # [B, 2]
+        output = F.softmax(output, dim=-1)[:, 1]    # [B]
+        item = torch.argmax(output).item()
+        msg = utterances_[item]
+        return msg
         
     @torch.no_grad()
     def get_reward(self, context, done=False, steps=0):
@@ -224,6 +242,7 @@ class BERTRetrievalEnvAgent(BERTRetrievalAgent):
             reward = -self.args['smooth_penalty'] * output.item()
             return reward 
         
+    @torch.no_grad()
     def get_res(self, data):
         '''return reward and next utterances for the BERTRetrievalEnvAgent'''
         msgs = [i['msg'] for i in data['msgs']]
@@ -252,6 +271,7 @@ class BERTRetrievalKGAgent(BERTRetrievalAgent):
         )
         print(f'[!] load the chinese word vectors over')
         self.args['topic_topn'] = 20
+        self.args['talk_samples'] = 64
         
     def reset(self, target, init_node, method='greedy'):
         if method not in ['greedy', 'rl']:
@@ -273,7 +293,7 @@ class BERTRetrievalKGAgent(BERTRetrievalAgent):
         self.model.eval()
         # 1) inpt the topic information for the coarse filter in elasticsearch
         utterances, inpt_ids, token_type_ids, attn_mask = self.process_utterances(
-            self.arg['current_node'], msgs, max_len=self.args['max_len'],
+            [self.args['current_node']], msgs, max_len=self.args['max_len'], filter_=True,
         )
         # 2) neural ranking with the topic information
         output = self.model(inpt_ids, token_type_ids, attn_mask)    # [B, 2]
@@ -294,7 +314,8 @@ class BERTRetrievalKGAgent(BERTRetrievalAgent):
     def obtain_keywords(self, utterance):
         '''select the keyword that most similar to the current_node as the keyword in the human response'''
         keywords = analyse.extract_tags(utterance)
-        dis2node = [(i, self.word2vec.similarity(self.args['current_node'], i)) for i in keywords]
+        dis2node = [(i, self.word2vec.similarity(self.args['current_node'], i)) for i in keywords if i in self.word2vec.index2word]
+        assert len(dis2node) != 0, f'[!] cannot find the keywords in the human utterances'
         keyword = sorted(dis2node, key=lambda x: x[1])[-1][0]
         return keyword
     
@@ -311,9 +332,9 @@ class BERTRetrievalKGAgent(BERTRetrievalAgent):
             ]
         }
         ''' 
-        if len(self.topic_history) > 1:
+        if len(data['msgs']) > 0:
             # 1) move
-            last_response = data['msgs'][-1]
+            last_response = data['msgs'][-1]['msg']
             user_keyword = self.obtain_keywords(last_response)
             self.topic_history.append(user_keyword)
             self.history.append(last_response)
@@ -334,6 +355,7 @@ class BERTRetrievalKGAgent(BERTRetrievalAgent):
             # the first round doesn't to move, just randomly choose the coherent initial utterance
             done = False
             res = self.searcher.talk('', topic=self.args['current_node'])
+            self.history.append(res)
         return res, done
     
 class BERTRetrievalDISAgent(RetrievalBaseAgent):

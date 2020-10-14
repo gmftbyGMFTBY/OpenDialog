@@ -14,6 +14,7 @@ def parser_args():
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--max_step', type=int, default=20)
     parser.add_argument('--seed', type=float, default=30)
+    parser.add_argument('--history_length', type=int, default=5)
     return parser.parse_args()
 
 def load_agent_model():
@@ -23,7 +24,7 @@ def load_agent_model():
     return agent
 
 def load_human_model():
-    args['model'] = 'bertretrieval'
+    args['model'] = 'bertretrievalenv'
     parameter_map, parameter_key = collect_parameter_4_model(args)
     agent = agent_map[args['model']](*parameter_map, **parameter_key)
     agent.load_model(f'ckpt/zh50w/{args["retrieval_model"]}/best.pt')
@@ -31,30 +32,34 @@ def load_human_model():
 
 def main(**args):
     '''interaction between two agents'''
-    ipdb.set_trace()
     agent = load_agent_model()
     human = load_human_model()
     print(f'[!] finish loading the agent and human model for interaction')
     
     # choose the target and init node
-    target = input('Target Node: ')
-    init_node = input('Init Node: ')
+    # target = input('Target Node: ')
+    # init_node = input('Init Node: ')
+    target, init_node = '宋词', '文言文'
     agent.reset(target, init_node, args['method'])
     
     step, status, data = 0, 'Success', {'msgs': []}
-    for i in range(args['max_step']):
+    while True:
+        # ipdb.set_trace()
         context, done = agent.get_res(data)
         data['msgs'].append({'msg': context})
         if done:
             break
         reply = human.get_res(data)
         data['msgs'].append({'msg': reply})
-        step += 1
-    else:
-        status = 'Failed'
+        step += 2
+        if step >= args['max_step']:
+            state = 'Failed'
+            break
+        # only consider a part of the conversation history
+        data['msgs'] = data['msgs'][-args['history_length']:]
     print(f'[!] interaction from {init_node} to {target} over, status: {status}')
-    print('Dialog History:\n===========')
-    for idx, (i, j) in enumerate(zip(agent.history, agent.topic)):
+    print('========== Dialog History ===========')
+    for idx, (i, j) in enumerate(zip(agent.history, agent.topic_history)):
         user = 'Agent' if idx % 2 == 0 else 'Human'
         print(f'{user}-[{j}]: {i}')
 

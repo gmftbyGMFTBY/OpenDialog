@@ -9,4 +9,5 @@ CUDA_VISIBLE_DEVICES=$1 python self-play.py \
     --seed 20 \
     --multi_gpu $1 \
     --lang zh \
-    --mode test
+    --mode test \
+    --history_length 5

@@ -147,12 +147,25 @@ class RetrievalBaseAgent:
     def test_model(self, test_iter, path):
         raise NotImplementedError
 
-    def process_utterances(self, topic, msgs, max_len=0):
+    def process_utterances(self, topic, msgs, max_len=0, filter_=False):
         '''Process the utterances searched by Elasticsearch; input_ids/token_type_ids/attn_mask'''
         utterances_ = self.searcher.search(msgs, samples=self.args['talk_samples'], topic=topic)
         utterances_ = [i['response'] for i in utterances_]
         # remove the utterances that in the self.history
         utterances_ = list(set(utterances_) - set(self.history))
+        
+        if filter_:
+            # only consider the utterances that contains the keywords in the word vectors
+            utterances_candidates = []
+            for i in utterances_:
+                flag, keywords = False, jieba.analyse.extract_tags(i)
+                for keyword in keywords:
+                    if keyword in self.word2vec.index2word:
+                        flag = True
+                        break
+                if flag:
+                    utterances_candidates.append(i)
+            utterances_ = utterances_candidates
         
         # construct inpt_ids, token_type_ids, attn_mask
         inpt_ids = self.vocab.batch_encode_plus([msgs] + utterances_)['input_ids']
