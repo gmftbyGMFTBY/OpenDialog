@@ -106,7 +106,7 @@ if __name__ == "__main__":
     print(f'[!] finish loading the agent and human model for interaction')
     
     # src and tgt
-    source = '手机'
+    source = '骑车'
     targets = neighborhood(wordnet, source, 4, size=10)
     
     for target in tqdm(targets):
