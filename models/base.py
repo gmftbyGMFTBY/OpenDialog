@@ -152,7 +152,7 @@ class RetrievalBaseAgent:
         if not context:
             msgs = ''
         utterances_ = self.searcher.search(msgs, samples=self.args['talk_samples'], topic=topic)
-        utterances_ = [i['response'] for i in utterances_]
+        utterances_ = [i['utterance'] for i in utterances_]
         # remove the utterances that in the self.history
         utterances_ = list(set(utterances_) - set(self.history))
         

@@ -9,5 +9,5 @@ CUDA_VISIBLE_DEVICES=$1 python self-play.py \
     --multi_gpu $1 \
     --lang zh \
     --mode test \
-    --history_length 3 \
+    --history_length 5 \
     --talk_samples 64 | tee rest/self_play.txt

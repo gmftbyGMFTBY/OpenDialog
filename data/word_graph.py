@@ -138,7 +138,7 @@ def write_new_w2v(words, path):
             string = f'{word} {" ".join(map(str, vec))}\n'
             f.write(string)
             
-def retrieval_filter(words, samples=20):
+def retrieval_filter(words, samples=64):
     rest = chatter.multi_search(words, samples=samples)
     rest = rest['responses']
     flag = []
