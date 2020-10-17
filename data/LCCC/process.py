@@ -1,20 +1,22 @@
 from tqdm import tqdm
 import ipdb
-import ijson
 import json
 
 def read_file(path, mode='train'):
     with open(path) as f:
-        data = ijson.items(f, 'train')
-        ipdb.set_trace()
-        for i in tqdm(data):
-            ipdb.set_trace()
-    return data
+        data = json.load(f)['train']
+        dialogs = []
+        for i in data:
+            i = [''.join(j.split()) for j in i]
+            dialogs.append(i)
+    return dialogs
 
 def write_file(dataset, path):
     with open(path, 'w') as f:
-        for data in dataset:
-            f.write(f'{data[0]}\n{data[1]}\n\n')
+        for data in tqdm(dataset):
+            for utterance in data:
+                f.write(f'{utterance}\n')
+            f.write('\n')
 
 if __name__ == '__main__':
     dataset = read_file('LCCC-base.json', mode='train')

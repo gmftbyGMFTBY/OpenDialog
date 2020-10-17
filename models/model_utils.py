@@ -238,13 +238,22 @@ class ESUtils:
         if create_index:
             mapping = {
                 'properties': {
-                    'context': {
+                    'utterance': {
                         'type': 'text',
                         'analyzer': 'ik_max_word',
                         'search_analyzer': 'ik_smart'
                     }
                 }
             }
+            # ===== whitespace is used when the chinese text is already tokenized ===== #
+            # mapping = {
+            #     'properties': {
+            #         'utterance': {
+            #             'type': 'text',
+            #             'analyzer': 'whitespace'
+            #         }
+            #     }
+            # }
             if self.es.indices.exists(index=self.index):
                 print(f'[!] delete the index of the elasticsearch')
                 self.es.indices.delete(index=self.index)
@@ -252,15 +261,14 @@ class ESUtils:
             print(rest)
             rest = self.es.indices.put_mapping(body=mapping, index=self.index)
 
-    def insert_pairs(self, pairs):
+    def insert_utterances(self, utterances):
         count = self.es.count(index=self.index)['count']
         actions = []
-        for i, qa in enumerate(tqdm(pairs)):
+        for i, utterance in enumerate(tqdm(utterances)):
             actions.append({
                 '_index': self.index,
                 '_id': i + count,
-                'context': qa[0],
-                'response': qa[1],
+                'utterance': utterance,
             })
         helpers.bulk(self.es, actions) 
         print(f'[!] retrieval database size: {self.es.count(index=self.index)["count"]}')
@@ -287,7 +295,7 @@ class ESChat:
             dsl = {
                 'query': {
                     'match': {
-                        'response': query    # Q-A matching is better
+                        'utterance': query    # Q-A matching is better
                     }
                 }
             }
@@ -302,8 +310,8 @@ class ESChat:
             #         }
             #     }
             # }
-            subitem = [{"match": {"response": {"query": i, 'boost': 2}}} for i in topic]
-            subitem.append({'match': {'response': {'query': query, 'boost': 1}}})
+            subitem = [{"match": {"utterance": {"query": i, 'boost': 5}}} for i in topic]
+            subitem.append({'match': {'utterance': {'query': query, 'boost': 1}}})
             dsl = {
                 'query': {
                     'bool': {
@@ -317,10 +325,9 @@ class ESChat:
             for h in hits:
                 item = {
                     'score': h['_score'], 
-                    'context': h['_source']['context'],
-                    'response': h['_source']['response']
+                    'utterance': h['_source']['utterance']
                 }
-                if item['response'] in query or 'http' in item['response']:
+                if item['utterance'] in query or 'http' in item['utterance']:
                     # avoid the repetive responses
                     continue
                 else:
@@ -335,7 +342,7 @@ class ESChat:
         search_arr = []
         for query in querys:
             search_arr.append({'index': self.index})
-            search_arr.append({'query': {'match': {'response': query}}, 'size': samples})
+            search_arr.append({'query': {'match': {'utterance': query}}, 'size': samples})
         request = ''
         for each in search_arr:
             request += f'{json.dumps(each)} \n'
@@ -343,7 +350,7 @@ class ESChat:
         return rest
 
     def talk(self, msgs, topic=None):
-        rest = self.search(msgs, samples=1, topic=topic)[0]['response']
+        rest = self.search(msgs, samples=1, topic=topic)[0]['utterance']
         # for debug
         # rest = self.search(topic, msgs, samples=10)
         # rest = [i['response'] for i in rest]

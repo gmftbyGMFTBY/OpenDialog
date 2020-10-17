@@ -9,6 +9,7 @@ import jieba
 import json
 import os
 import ipdb
+from LAC import LAC
 from utils import *
 
 '''
@@ -28,7 +29,7 @@ retrieval_datasets = ['ECG', 'zhihu', 'zhidao', 'kgdialog', 'kdconv', 'zh50w', '
 generative_datasets = ['kgdialog', 'kdconv', 'zh50w', 'xiaohuangji', 'doubangroup']
 
 single_turn = ['ECG', 'zhihu', 'xiaohuangji', 'zhidao', 'weibo400w', 'qingyun', 'ptt', 'doubangroup']
-multi_turn = ['kgdialog', 'kdconv', 'zh50w', 'douban300w']
+multi_turn = ['LCCC', 'kgdialog', 'kdconv', 'zh50w', 'douban300w']
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -37,7 +38,11 @@ def parse_args():
     return parser.parse_args()
 
 def read_dataset(name):
-    path = f'{name}/train.txt'
+    if name == 'zh50w':
+        # for zh50w, train.txt is the processed dataset for GPT2 model
+        path = f'{name}/train_.txt'
+    else:
+        path = f'{name}/train.txt'
     with open(path) as f:
         data = f.read()
         # data = data.replace('[SEP]', ' [SEP] ')
@@ -60,31 +65,27 @@ def read_dataset_(name):
     print(f'[!] read dataset {name} over, get {len(utterances)} utterances')
     return utterances
 
-def filter_useless(pairs):
+def filter_useless(utterances):
     words = ['图片评论', '如图']
     rest = []
-    for pair in pairs:
-        if len(pair[0]) > 300 or len(pair[1]) > 300:
-            continue
-        if len(pair[0]) < 3 or len(pair[1]) < 3:
+    for utterance in utterances:
+        if len(utterance) > 300 or len(utterance) < 5:
             continue
         for word in words:
-            if word in pair[1] or word in pair[0]:
+            if word in utterance:
                 break
         else:
-            rest.append(pair)
+            rest.append(utterance)
     return rest
 
-def make_pairs(dialogs, qa=True):
-    if qa:
-        pairs = []
-        for dialog in dialogs:
-            pairs.append((' [SEP] '.join(dialog[:-1]), dialog[-1]))
-    else:
-        pairs = []
-        for dialog in dialogs:
-            for utterance in dialog:
-                pairs.append((utterance, utterance))
+def make_pairs(dialogs, cutter=False):
+    pairs = []
+    for dialog in tqdm(dialogs):
+        for utterance in dialog:
+            if cutter:
+                pairs.append(' '.join(jieba.cut(utterance)))
+            else:
+                pairs.append(utterance)
     return pairs
 
 def collect_samples_qq(index_name):
@@ -94,45 +95,24 @@ def collect_samples_qq(index_name):
     tool = ESUtils(index_name, create_index=True)
     print(f'[!] {index_name} elasticsearch database created')
     def insert_data(pairs):
-        tool.insert_pairs(pairs)
+        tool.insert_utterances(pairs)
         print(f'{tool.es.count(index=index_name)["count"]} utterances in database')
     for i in single_turn:
-        insert_data(filter_useless(make_pairs(read_dataset(i), qa=True)))
+        insert_data(filter_useless(make_pairs(read_dataset(i))))
         print(f'[!] finish insert the {i} dataset')
     for i in multi_turn:
-        insert_data(filter_useless(make_pairs(read_dataset(i), qa=True)))
+        insert_data(filter_useless(make_pairs(read_dataset(i))))
         print(f'[!] finish insert the {i} dataset')
-
-# ======== only insert the zh50w dataset into collect_sample_qq ========== #
-def collect_samples_qq_zh50w(index_name):
-    '''
-    if insert new dataset, just set parameters `create_index` as False
-    '''
-    tool = ESUtils(index_name, create_index=True)
-    print(f'[!] {index_name} elasticsearch database created')
-    def insert_data(pairs):
-        tool.insert_pairs(pairs)
-        print(f'{tool.es.count(index=index_name)["count"]} utterances in database')
-    i = 'zh50w'
-    insert_data(filter_useless(make_pairs(read_dataset(i), qa=True)))
-    print(f'[!] finish insert the {i} dataset')
-
-def collect_samples_qa(index_name):
-    '''
-    QA pairs use the sentences from the zhihu
-    '''
-    tool = ESUtils(index_name, create_index=False)
-    def insert_data(pairs):
-        tool.insert_pairs(pairs)
-        print(f'{tool.es.count(index=index_name)["count"]} utterances in database')
 
 if __name__ == "__main__":
     args = parse_args()
     args = vars(args)
     if args['mode'] == 'insert':
+        lac = LAC(mode='seg')
         # collect_samples_qq('retrieval_database')
         collect_samples_qq('retrieval_database')
         # collect_samples_qq_zh50w('zh50w_database')
+        # collect_samples_qq_LCCC('zh50w_database')
     elif args['mode'] == 'generative':
         # train, test mode (99:1), without dev
         # prepare the generative dataset

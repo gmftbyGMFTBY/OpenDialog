@@ -35,7 +35,6 @@ def get_res():
 
     res = {
         'msg': msg,
-        'from_id': data['robot_id'],
         'timestamp': time.time()
     }
     msgs_str = ' [SEP] '.join([i['msg'] for i in data['msgs']])
