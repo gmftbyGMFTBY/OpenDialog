@@ -310,7 +310,7 @@ class ESChat:
             #         }
             #     }
             # }
-            subitem = [{"match": {"utterance": {"query": i, 'boost': 5}}} for i in topic]
+            subitem = [{"match": {"utterance": {"query": i, 'boost': 7}}} for i in topic]
             subitem.append({'match': {'utterance': {'query': query, 'boost': 1}}})
             dsl = {
                 'query': {

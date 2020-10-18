@@ -174,7 +174,10 @@ class RetrievalBaseAgent:
         inpt_ids = [torch.LongTensor(i[0]) for i in collection]
         token_type_ids = [torch.LongTensor(i[1]) for i in collection]
         
-        inpt_ids = pad_sequence(inpt_ids, batch_first=True, padding_value=self.args['pad'])
+        try:
+            inpt_ids = pad_sequence(inpt_ids, batch_first=True, padding_value=self.args['pad'])
+        except:
+            ipdb.set_trace()
         token_type_ids = pad_sequence(token_type_ids, batch_first=True, padding_value=self.args['pad'])
         attn_mask_index = inpt_ids.nonzero().tolist()
         attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]

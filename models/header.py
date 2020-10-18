@@ -7,6 +7,7 @@ import math
 import gensim
 from queue import *
 import jieba.analyse
+from LAC import LAC
 import ipdb
 import json
 import re

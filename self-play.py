@@ -15,6 +15,8 @@ def parser_args():
     parser.add_argument('--seed', type=float, default=30)
     parser.add_argument('--history_length', type=int, default=5)
     parser.add_argument('--talk_samples', type=int, default=128)
+    parser.add_argument('--min_topic_length', type=int, default=4)
+    parser.add_argument('--max_topic_length', type=int, default=6)
     return parser.parse_args()
 
 def load_agent_model():
@@ -30,11 +32,17 @@ def load_human_model():
     agent.load_model(f'ckpt/zh50w/{args["retrieval_model"]}/best.pt')
     return agent
 
-def neighborhood(G, node, n, size=10):
+def neighborhood(G, start_node, n, size=10):
     '''https://stackoverflow.com/questions/22742754/finding-the-n-degree-neighborhood-of-a-node'''
-    path_lengths = nx.single_source_shortest_path_length(G, node, cutoff=n)
+    n -= 1
+    path_lengths = nx.single_source_shortest_path_length(G, start_node, cutoff=n)
     nodes = [node for node, length in path_lengths.items() if length == n]
-    return random.sample(nodes, size)
+    # choose the nodes that has the high similarity with the given node
+    similairty = [(w2v.similarity(start_node, node), node) for node in nodes]
+    similairty = sorted(similairty, key=lambda x: x[0], reverse=True)[:size]
+    print(similairty)
+    return [i[1] for i in similairty]
+    # return random.sample(nodes, size)
 
 def isEnd(utterance, target):
     if target in utterance:
@@ -88,10 +96,11 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args['seed'])
     
-    # load word net
+    # load word net and word2vec gensim
     with open('data/wordnet.pkl', 'rb') as f:
         wordnet = pickle.load(f)
     args['wordnet'] = wordnet
+    w2v = gensim.models.KeyedVectors.load_word2vec_format('data/chinese_w2v_base.txt', binary=False)
     
     print('[!] parameters:')
     print(args)
@@ -106,8 +115,9 @@ if __name__ == "__main__":
     print(f'[!] finish loading the agent and human model for interaction')
     
     # src and tgt
-    source = '骑车'
-    targets = neighborhood(wordnet, source, 4, size=10)
+    source = '鲜花'
+    length = random.randint(args['min_topic_length'], args['max_topic_length'])
+    targets = neighborhood(wordnet, source, length, size=10)
     
     for target in tqdm(targets):
         main(source, target, **args)

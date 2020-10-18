@@ -189,6 +189,7 @@ class BERTRetrievalEnvAgent(BERTRetrievalAgent):
         self.args['done_reward'], self.args['smooth_penalty'], self.args['step_penalty'] = 100, 20, 5
         self.wordnet = wordnet
         self.args['talk_sample'] = talk_samples
+        self.lac = LAC(mode='lac')
         
     def wrap_utterances(self, context, max_len=0):
         '''context is a list of string, which contains the dialog history'''
@@ -239,12 +240,58 @@ class BERTRetrievalEnvAgent(BERTRetrievalAgent):
             reward = -self.args['smooth_penalty'] * output.item()
             return reward 
         
+    def extract_topic_words(self, utterance):
+        def filter(word, tag):
+            def isChinese():
+                for ch in word:
+                    if not '\u4e00' <= ch <= '\u9fff':
+                        return False
+                return True
+            def HaveDigital():
+                if bool(re.search(r'\d', word)):
+                    return False
+                else:
+                    return True
+            def Length():
+                if 1 < len(word) < 5:
+                    return True
+                else:
+                    return False
+            def HaveAlpha():
+                for ch in word:
+                    if ch.encode().isalpha():
+                        return False
+                return True
+            def Special():
+                for ch in word:
+                    if ch in set('一二三四五六七八九十月日周年区东西南北。，|；“”‘’！~·、：=-+#￥%……&*（）【】@？.,?[]{}()!$^`";:'):
+                        return False
+                return True
+            def CheckTag():
+                if tag in set(['n', 'nz', 'nw', 'v', 'vn', 'a', 'ad', 'an', 'ORG', 'PER', 'LOC']):
+                    return True
+                else:
+                    return False
+            def InWordNet():
+                if word in self.wordnet.nodes:
+                    return True
+                else:
+                    return False
+            return isChinese() and HaveDigital() and Length() and HaveAlpha() and Special() and CheckTag() and InWordNet()
+        words, tags = self.lac.run(utterance)
+        topic = []
+        for word, tag in zip(words, tags):
+            if filter(word, tag):
+                topic.append(word)
+        return list(set(topic))
+        
     @torch.no_grad()
     def get_res(self, data):
         '''return reward and next utterances for the BERTRetrievalEnvAgent'''
         msgs = [i['msg'] for i in data['msgs']]
+        # NOTE: in order to make sure the user speak based on the given conversation, use the topic for coarse ranking
+        topic = self.extract_topic_words(msgs[-1])
         msgs = ' [SEP] '.join(msgs)
-        topic = data['topic'] if 'topic' in data else None
         res = self.talk(msgs, topic=topic)
         self.history.append(res)
         return res
@@ -280,7 +327,7 @@ class BERTRetrievalKGGreedyAgent(BERTRetrievalAgent):
         self.model.eval()
         # 1) inpt the topic information for the coarse filter in elasticsearch
         utterances, inpt_ids, token_type_ids, attn_mask = self.process_utterances(
-            self.topic_history[-2:], msgs, max_len=self.args['max_len'],
+            [self.args['current_node']], msgs, max_len=self.args['max_len'],
         )
         # 2) neural ranking with the topic information
         output = self.model(inpt_ids, token_type_ids, attn_mask)    # [B, 2]
@@ -326,6 +373,6 @@ class BERTRetrievalKGGreedyAgent(BERTRetrievalAgent):
             msgs = ' [SEP] '.join(msgs)
             res = self.talk(msgs)
         else:
-            res = self.searcher.talk('', topic=self.args['current_node'])
+            res = self.searcher.talk('', topic=[self.args['current_node']])
         self.history.append(res)
         return res

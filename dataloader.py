@@ -943,6 +943,7 @@ class BERTIRDataset(Dataset):
         self.mode = mode
         self.max_len = max_len 
         data = read_text_data(path)
+        # data = read_text_data_nosep(path)
         responses = [i[1] for i in data]
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
         self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
