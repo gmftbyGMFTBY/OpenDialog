@@ -280,6 +280,14 @@ class ESChat:
     def __init__(self, index_name, kb=True):
         self.es = Elasticsearch(http_auth=('elastic', 'elastic123'))
         self.index = index_name
+        self.es.indices.put_settings(
+            index=self.index,
+            body={
+                'index': {
+                    'max_result_window': 500000,
+                }
+            }
+        )
 
     def search(self, query, samples=10, topic=None):
         '''

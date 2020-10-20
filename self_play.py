@@ -14,9 +14,8 @@ def parser_args():
     parser.add_argument('--max_step', type=int, default=20)
     parser.add_argument('--seed', type=float, default=30)
     parser.add_argument('--history_length', type=int, default=5)
-    parser.add_argument('--talk_samples', type=int, default=128)
-    parser.add_argument('--min_topic_length', type=int, default=4)
-    parser.add_argument('--max_topic_length', type=int, default=6)
+    parser.add_argument('--recoder', type=str, default='rest/self_play.txt')
+    parser.add_argument('--talk_samples', type=int, default=256)
     return parser.parse_args()
 
 def load_agent_model():
@@ -51,15 +50,14 @@ def isEnd(utterance, target):
 
 def main(source, target, **args):
     '''interaction between two agents'''
-    # path = nx.dijkstra_path(args['wordnet'], source=source, target=target)
-    # print(path)
     agent.reset(target, source)
-    
+    human.reset()
+    recoder = args['recoder']
     step, status, data, conversation = 0, 'Success', {'msgs': []}, []
     while True:
         context = agent.get_res(data)
         data['msgs'].append({'msg': context})
-        conversation.append(('Agent', context, agent.args['current_node']))
+        conversation.append(('Agent', context, agent.topic_history[-1]))
         data['msgs'] = data['msgs'][-args['history_length']:]
         step += 1
         
@@ -77,28 +75,28 @@ def main(source, target, **args):
         if step >= args['max_step']:
             status = 'Failed'
             break
+            
+    if status == 'Failed':
+        return False, None
     
-    string = f'[!] interaction from {source} to {target} over, status: {status}'
-    print(string)
-    
-    string = '========== Dialog History ==========='
-    print(string)
+    print(
+        f'========== Dialog History {source} -> {target} ===========', 
+        file=recoder,
+        flush=True,
+    )
     for idx, (speaker, utterance, topic) in enumerate(conversation):
         if topic:
             string = f'{speaker}-{topic}: {utterance}'
         else:
             string = f'{speaker}: {utterance}'
-        print(string)
-        
-    if status == 'Success':
-        return True, step
-    else:
-        return False, None
+        print(string, file=recoder, flush=True)
+    return True, step
 
 if __name__ == "__main__":
     args = parser_args()
     args = vars(args)
     
+    # disable the fixed random seed can obtain the rich results
     random.seed(args['seed'])
     torch.manual_seed(args['seed'])
     if torch.cuda.is_available():
@@ -109,6 +107,8 @@ if __name__ == "__main__":
         wordnet = pickle.load(f)
     args['wordnet'] = wordnet
     w2v = gensim.models.KeyedVectors.load_word2vec_format('data/chinese_w2v_base.txt', binary=False)
+    with open('data/topic_words.pkl', 'rb') as f:
+        topic_words = pickle.load(f)
     
     print('[!] parameters:')
     print(args)
@@ -125,14 +125,16 @@ if __name__ == "__main__":
     print(f'[!] finish loading the agent and human model for interaction')
     
     # src and tgt
-    sources = random.sample(list(wordnet), 10)
-    targets = random.sample(list(wordnet), 10)
+    sources = random.sample(topic_words, 300)
+    targets = random.sample(list(set(topic_words) - set(sources)), 300)
     
     counter, avg_step = 0, []
-    for source, target in tqdm(list(zip(sources, targets))):
-        done, step =  main(source, target, **args)
-        if done:
-            counter += 1
-            avg_step.append(step)
+    with open(args['recoder'], 'w') as f:
+        args['recoder'] = f
+        for source, target in tqdm(list(zip(sources, targets))):
+            done, step =  main(source, target, **args)
+            if done:
+                counter += 1
+                avg_step.append(step)
     print(f'[!] {"=" * 10} success ratio: {round(counter/len(targets), 4)} average success step: {round(np.mean(avg_step), 4)} {"=" * 10}')
         

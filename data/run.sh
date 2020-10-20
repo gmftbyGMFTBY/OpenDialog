@@ -5,6 +5,10 @@ mode=$1
 if [ $mode = 'init_es' ]; then
     # init the ElasticSearch and restore the retrieval database
     python process_data.py --mode insert
+elif [ $mode = 'init_topic_guided' ]; then
+    # python word_graph.py --mode graph
+    # generate the words by frequecy from the corpus
+    python word_graph.py --mode word
 elif [ $mode = 'init_gen' ]; then
     # init and create the whole generative dataset
     python process_data.py --mode generative

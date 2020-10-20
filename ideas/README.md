@@ -22,7 +22,7 @@
     * 逻辑性Logicality: 判断句子的上下文逻辑是否连贯（句子级），负采样训练[句子重复，句子删除，句子打乱顺序]
     
 9. 检索式方法的粗筛，Q-A匹配比Q-Q匹配好很多
-10. 复现PloyEncoder和RocketQA(batch内的负采样方法掌握)
+10. 复现PloyEncoder和RocketQA(batch内的负采样方法掌握)，把triplenet的思路加到bi-encoder的检索式对话里面，提一种新的方法，试图建模层次信息，复用每一句话的embedding。或者也可以借鉴hierarchical transformer
 
 ## 生成式
 

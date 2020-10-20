@@ -59,6 +59,7 @@ def parser_args():
     parser = argparse.ArgumentParser(description='wordnet parameters')
     parser.add_argument('--weight_threshold', type=float, default=0.6)
     parser.add_argument('--topn', type=int, default=10)
+    parser.add_argument('--mode', type=str, default='graph')
     return parser.parse_args()
 
 def load_stopwords():
@@ -67,33 +68,32 @@ def load_stopwords():
         data = [i for i in data if i.strip()]
     return data
 
-def collect_wordlist_from_corpus(path, topn=500000):
+def collect_wordlist_from_corpus(path, topn=50000):
     '''only save the tokens that length from 2 to 4'''
-    cutter = LAC(mode='seg')
+    cutter = LAC(mode='lac')
     with open(path) as f:
-        # data = f.read().split('\n\n')
-        # data = [i.split('\n') for i in data]
-        data = json.load(f)['train']
-        data = random.sample(data, 2000000)
-        x_data = []
-        for i in data:
-            x_data.append([''.join(j.split()) for j in i])
-        data = x_data
-        print(f'[!] load the dataset from {path} over ...')
+        data = f.read().split('\n\n')
+        data = [i.split('\n') for i in data if i.strip()]
+        data = random.sample(data, 1000000)
+        print(f'[!] load the dataset from {path}({len(data)}) over ...')
     batch_size, words_collector = 512, Counter()
     pbar = tqdm(range(0, len(data), batch_size))
     for idx in pbar:
         dialogs = data[idx:idx+batch_size]
         dialogs = [' '.join(i) for i in dialogs]
-        words = chain(*cutter.run(dialogs))
-        words = [w for w in words if filter(w)]
-        words_collector.update(words)
+        rest = cutter.run(dialogs)
+        collector = []
+        for words, tags in rest:
+            for word, tag in zip(words, tags):
+                if filter(word, tag):
+                    collector.append(word)
+        words_collector.update(collector)
         pbar.set_description(f'[!] collect words: {len(words_collector)}')
     words = [w for w, _ in words_collector.most_common(topn)]
     print(f'[!] {len(words_collector)} -> {len(words)}')
     return words
         
-def filter(word):
+def filter(word, tag):
     def isChinese():
         for ch in word:
             if not '\u4e00' <= ch <= '\u9fff':
@@ -120,15 +120,16 @@ def filter(word):
                 return False
         return True
     def CheckTag():
-        # ipdb.set_trace()
-        word_, pos = lac.run(word)
-        if len(word_) != 1:
-            return False
-        if pos[0] in set(['n', 'nz', 'nw', 'v', 'vn', 'a', 'ad', 'an', 'ORG', 'PER', 'LOC']):
+        if tag in set(['n', 'nz', 'nw', 'v', 'vn', 'a', 'ad', 'an', 'ORG', 'PER', 'LOC']):
             return True
         else:
             return False
-    return isChinese() and HaveDigital() and Length() and HaveAlpha() and Special() and CheckTag()
+    def InW2V():
+        if word in w2v:
+            return True
+        else:
+            return False
+    return isChinese() and HaveDigital() and Length() and HaveAlpha() and Special() and CheckTag() and InW2V()
 
 def write_new_w2v(words, path):
     with open(path, 'w') as f:
@@ -162,45 +163,53 @@ if __name__ == "__main__":
     args = parser_args()
     args = vars(args)
     
-    lac = LAC(mode='lac')
-    chatter = ESChat('retrieval_database')
-    stopwords = load_stopwords()
-    
-    if not os.path.exists('chinese_w2v_base.txt'):
-        # 1)
-        w2v = KeyedVectors.load_word2vec_format('chinese_w2v.txt', binary=False)
-        print(f'[!] load the word2vec from chinese_w2v.txt')
-        # 2)
-        wordlist = w2v.index2word
-        new_wordlist = [word for word in tqdm(wordlist) if filter(word)]
-        print(f'[!] squeeze the wordlist from {len(wordlist)} to {len(new_wordlist)}')
-        # stop words remove
-        new_wordlist_ = list(set(new_wordlist) - set(stopwords))
-        print(f'[!] squeeze the wordlist from {len(new_wordlist)} to {len(new_wordlist_)}')
-        # retrieval check and remove
-        new_wordlist_2, batch_size = [], 256
-        for idx in tqdm(range(0, len(new_wordlist_), batch_size)):
-            words = new_wordlist_[idx:idx+batch_size]
-            for word, rest in zip(words, retrieval_filter(words)):
-                if rest:
-                    new_wordlist_2.append(word)
-        print(f'[!] squeeze the wordlist from {len(new_wordlist_)} to {len(new_wordlist_2)}')
-        # 3)
-        write_new_w2v(new_wordlist_2, 'chinese_w2v_base.txt')
-        print(f'[!] write the new w2v into chinese_w2v_base.txt')
-    # 4)
-    w2v = KeyedVectors.load_word2vec_format('chinese_w2v_base.txt', binary=False)
-    print(f'[!] load the new word2vec from chinese_w2v_base.txt')
-    # 5)
-    if not os.path.exists('wordnet.pkl'):
-        graph = nx.Graph()
-        graph.add_nodes_from(w2v.index2word)
-        for word in tqdm(w2v.index2word):
-            neighbors = w2v.most_similar(word, topn=args['topn'])
-            graph.add_weighted_edges_from([(word, n, 1 - w) for n, w in neighbors if 1 - w < args['weight_threshold']])
-        with open('wordnet.pkl', 'wb') as f:
-            pickle.dump(graph, f)
-        print(f'[!] save the word net into wordnet.pkl')
-    else:
-        with open('wordnet.pkl', 'rb') as f:
-            graph = pickle.load(f)
+    if args['mode'] == 'word':
+        # default use the LCCC dataset
+        print(f'[!] make sure you already run the graph mode')
+        w2v = KeyedVectors.load_word2vec_format('chinese_w2v_base.txt', binary=False)
+        words = collect_wordlist_from_corpus('LCCC/train.txt', topn=20000)
+        with open('topic_words.pkl', 'wb') as f:
+            pickle.dump(words, f)
+    elif args['mode'] == 'graph':
+        lac = LAC(mode='lac')
+        chatter = ESChat('retrieval_database')
+        stopwords = load_stopwords()
+
+        if not os.path.exists('chinese_w2v_base.txt'):
+            # 1)
+            w2v = KeyedVectors.load_word2vec_format('chinese_w2v.txt', binary=False)
+            print(f'[!] load the word2vec from chinese_w2v.txt')
+            # 2)
+            wordlist = w2v.index2word
+            new_wordlist = [word for word in tqdm(wordlist) if filter(word)]
+            print(f'[!] squeeze the wordlist from {len(wordlist)} to {len(new_wordlist)}')
+            # stop words remove
+            new_wordlist_ = list(set(new_wordlist) - set(stopwords))
+            print(f'[!] squeeze the wordlist from {len(new_wordlist)} to {len(new_wordlist_)}')
+            # retrieval check and remove
+            new_wordlist_2, batch_size = [], 256
+            for idx in tqdm(range(0, len(new_wordlist_), batch_size)):
+                words = new_wordlist_[idx:idx+batch_size]
+                for word, rest in zip(words, retrieval_filter(words)):
+                    if rest:
+                        new_wordlist_2.append(word)
+            print(f'[!] squeeze the wordlist from {len(new_wordlist_)} to {len(new_wordlist_2)}')
+            # 3)
+            write_new_w2v(new_wordlist_2, 'chinese_w2v_base.txt')
+            print(f'[!] write the new w2v into chinese_w2v_base.txt')
+        # 4)
+        w2v = KeyedVectors.load_word2vec_format('chinese_w2v_base.txt', binary=False)
+        print(f'[!] load the new word2vec from chinese_w2v_base.txt')
+        # 5)
+        if not os.path.exists('wordnet.pkl'):
+            graph = nx.Graph()
+            graph.add_nodes_from(w2v.index2word)
+            for word in tqdm(w2v.index2word):
+                neighbors = w2v.most_similar(word, topn=args['topn'])
+                graph.add_weighted_edges_from([(word, n, 1 - w) for n, w in neighbors if 1 - w < args['weight_threshold']])
+            with open('wordnet.pkl', 'wb') as f:
+                pickle.dump(graph, f)
+            print(f'[!] save the word net into wordnet.pkl')
+        else:
+            with open('wordnet.pkl', 'rb') as f:
+                graph = pickle.load(f)

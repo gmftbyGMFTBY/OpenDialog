@@ -213,6 +213,9 @@ class BERTRetrievalEnvAgent(BERTRetrievalAgent):
         self.args['talk_sample'] = talk_samples
         self.lac = LAC(mode='lac')
         
+    def reset(self):
+        self.history = []
+        
     def wrap_utterances(self, context, max_len=0):
         '''context is a list of string, which contains the dialog history'''
         context, response =  ' [SEP] '.join(context[:-1]), context[-1]
@@ -423,54 +426,40 @@ class BERTRetrievalClusterGreedyAgent(BERTRetrievalAgent):
         self.w2v = gensim.models.KeyedVectors.load_word2vec_format(
             'data/chinese_w2v_base.txt', binary=False
         )
+        self.cutter = LAC(mode='seg')
         
     def reset(self, target, source):
-        self.args['target'], self.args['current_node'] = target, [source]
+        self.args['target'], self.args['current_node'] = target, source
         self.topic_history, self.history = [[source]], []
         print(f'[! Reset the KG target] source: {source}; target: {target}')
         
-    def get_cluster(self, start_nodes, n, size=5):
+    def obtain_keywords(self, utterance):
+        '''select the keyword that most similar to the current_node as the keyword in the human response'''
+        return [i for i in self.cutter.run(utterance) if i in self.w2v]
+        
+    def get_cluster(self, start_nodes, size=5):
         '''similarity is the average between the target and the current node'''
         candidates = []
         for start_node in start_nodes:
-            nodes = self.w2v.most_similar(start_node, topn=self.args['cluster_width'])
-            candidates.extend([i[0] for i in nodes])
-        candidates = list(set(candidates))
+            candidates.extend(
+                self.w2v.most_similar(start_node, topn=self.args['cluster_width'])
+            )
+        candidates = [i[0] for i in candidates]
+        candidates = list(set(candidates) - set(chain(*self.topic_history)))
         if self.args['target'] in candidates:
             return [self.args['target']]
-        target_similarity = [(self.w2v.similarity(self.args['target'], node), node) for node in candidates]
-        start_similarity = []
-        for node in candidates:
-            p = []
-            for start_node in start_nodes:
-                p.append(self.w2v.similarity(start_node, node))
-            start_similarity.append((np.average(p), node))
-        similarity = [(0.6 * t + 0.4 * s, node) for (t, node), (s, node) in zip(target_similarity, start_similarity)]
+        similarity = [(self.w2v.similarity(self.args['target'], node), node) for node in candidates]
+        # 不应该这么算start similarity，这个相似度的目的是为了保持平滑性，这里可以参考2019 ACL Target-guided open-domain dialog system
+        # 1. PMI; 2. 网络预测
         similarity = sorted(similarity, key=lambda x: x[0], reverse=True)
-        # 
-        chosen = []
-        while len(chosen) < size:
-            chosen.append(similarity[0][1])
-            new_similarity, similarity = similarity[1:], []
-            for weight, node in new_similarity:
-                p = []
-                for word in chosen:
-                    p.append(self.w2v.similarity(word, node))
-                p = 0.3 * np.mean(p)
-                similarity.append((weight + p, node))
-            similarity = sorted(similarity, key=lambda x: x[0], reverse=True)
-        return chosen
+        return [i[1] for i in similarity[:size]]
         
     def move_on_kg(self):
         '''judge whether meet the end'''
-        if self.args['target'] in self.topic_history[-1]:
-            return
         self.args['current_node'] = self.get_cluster(
-            self.args['current_node'], 
-            self.args['cluster_width'], 
+            self.args['current_node'],
             size=self.args['num_candidate'],
         )
-        self.topic_history.append(self.args['current_node'])
         
     @torch.no_grad()
     def talk(self, msgs):
@@ -486,17 +475,18 @@ class BERTRetrievalClusterGreedyAgent(BERTRetrievalAgent):
         # 3) post ranking with multiple current topic words
         output = torch.argsort(output, descending=True)
         for i in output:
-            flag = False
+            flag, chosen_word = False, None
             for word in self.args['current_node']:
                 if word in utterances[i.item()]:
                     item, flag = i, True
+                    chosen_word = word
                     break
             if flag:
                 break
         else:
             item = 0
         msg = utterances[item]
-        return msg
+        return msg, chosen_word
     
     def get_res(self, data):
         '''
@@ -513,13 +503,21 @@ class BERTRetrievalClusterGreedyAgent(BERTRetrievalAgent):
         ''' 
         if len(data['msgs']) > 0:
             # 1) move
+            response = data['msgs'][-1]['msg']
+            keywords = self.obtain_keywords(response)
+            if self.args['current_node']:
+                self.args['current_node'] = list(set(keywords + [self.args['current_node']]))
+            else:
+                self.args['current_node'] = list(set(keywords))
             self.move_on_kg()
             # 2) obtain the responses based on the next_node
             msgs = [i['msg'] for i in data['msgs']]
             msgs = ' [SEP] '.join(msgs)
-            res = self.talk(msgs)
+            res, chosen_word = self.talk(msgs)
+            self.topic_history.append(self.args['current_node'])
+            self.args['current_node'] = chosen_word
         else:
-            res = self.searcher.talk('', topic=self.args['current_node'])
+            res = self.searcher.talk('', topic=[self.args['current_node']])
         self.history.append(res)
         return res
     
