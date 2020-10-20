@@ -1,7 +1,7 @@
 from header import *
 from config import *
 
-'''self-play for testing knowledge graph topic-driven open-domain dialoge systems'''
+'''self-play for testing topic-driven open-domain dialoge systems'''
 
 def parser_args():
     parser = argparse.ArgumentParser(description='train parameters')
@@ -42,7 +42,6 @@ def neighborhood(G, start_node, n, size=10):
     similairty = sorted(similairty, key=lambda x: x[0], reverse=True)[:size]
     print(similairty)
     return [i[1] for i in similairty]
-    # return random.sample(nodes, size)
 
 def isEnd(utterance, target):
     if target in utterance:
@@ -52,16 +51,17 @@ def isEnd(utterance, target):
 
 def main(source, target, **args):
     '''interaction between two agents'''
-    path = nx.dijkstra_path(args['wordnet'], source=source, target=target)
-    print(path)
-    agent.reset(target, source, path)
+    # path = nx.dijkstra_path(args['wordnet'], source=source, target=target)
+    # print(path)
+    agent.reset(target, source)
     
     step, status, data, conversation = 0, 'Success', {'msgs': []}, []
     while True:
         context = agent.get_res(data)
         data['msgs'].append({'msg': context})
-        conversation.append(('Agent', context))
+        conversation.append(('Agent', context, agent.args['current_node']))
         data['msgs'] = data['msgs'][-args['history_length']:]
+        step += 1
         
         done = isEnd(context, target)
         if done:
@@ -70,10 +70,10 @@ def main(source, target, **args):
         
         reply = human.get_res(data)
         data['msgs'].append({'msg': reply})
-        conversation.append(('Human', reply))
+        conversation.append(('Human', reply, None))
         data['msgs'] = data['msgs'][-args['history_length']:]
-        
         step += 1
+        
         if step >= args['max_step']:
             status = 'Failed'
             break
@@ -83,9 +83,17 @@ def main(source, target, **args):
     
     string = '========== Dialog History ==========='
     print(string)
-    for idx, (speaker, utterance) in enumerate(conversation):
-        string = f'{speaker}: {utterance}'
+    for idx, (speaker, utterance, topic) in enumerate(conversation):
+        if topic:
+            string = f'{speaker}-{topic}: {utterance}'
+        else:
+            string = f'{speaker}: {utterance}'
         print(string)
+        
+    if status == 'Success':
+        return True, step
+    else:
+        return False, None
 
 if __name__ == "__main__":
     args = parser_args()
@@ -108,6 +116,8 @@ if __name__ == "__main__":
     # load the model
     if args['method'] == 'greedy':
         args['model'] = 'bertretrievalkggreedy'
+    elif args['method'] == 'clustergreedy':
+        args['model'] = 'bertretrievalclustergreedy'
     else:
         pass
     agent = load_agent_model()
@@ -115,10 +125,14 @@ if __name__ == "__main__":
     print(f'[!] finish loading the agent and human model for interaction')
     
     # src and tgt
-    source = '鲜花'
-    length = random.randint(args['min_topic_length'], args['max_topic_length'])
-    targets = neighborhood(wordnet, source, length, size=10)
+    sources = random.sample(list(wordnet), 10)
+    targets = random.sample(list(wordnet), 10)
     
-    for target in tqdm(targets):
-        main(source, target, **args)
+    counter, avg_step = 0, []
+    for source, target in tqdm(list(zip(sources, targets))):
+        done, step =  main(source, target, **args)
+        if done:
+            counter += 1
+            avg_step.append(step)
+    print(f'[!] {"=" * 10} success ratio: {round(counter/len(targets), 4)} average success step: {round(np.mean(avg_step), 4)} {"=" * 10}')
         

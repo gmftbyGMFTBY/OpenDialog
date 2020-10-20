@@ -929,8 +929,77 @@ class BERTIRBIDataset(Dataset):
             rid_mask = pad_sequence(rid, batch_first=True, padding_value=0)
         if torch.cuda.is_available():
             cid, rid, cid_mask, rid_mask = cid.cuda(), rid.cuda(), cid_mask.cuda(), rid_mask.cuda()
-        return cid, rid, cid_mask, rid_mask
+        return cid, rid, cid_mask, rid_mask   
 
+class TopicPredictDataset(Dataset):
+    
+    def __init__(self, path, mode='train', max_len=300):
+        self.mode = mode
+        self.max_len = max_len 
+        data = read_text_data(path)
+        # wordnet
+        cutter = LAC(mode='seg')
+        with open('data/wordnet.pkl', 'rb') as f:
+            self.wordnet = list(pickle.load(f).nodes)
+            self.wordnet_set = set(self.wordnet)
+        self.pp_path = f'{os.path.splitext(path)[0]}_topic.pt'
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
+        if os.path.exists(self.pp_path):
+            self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+            
+        responses, context = [], []
+        for ctx, res in tqdm(data):
+            p = []
+            for word in cutter.run(res):
+                if word in self.wordnet_set:
+                    p.append(word)
+            if len(p) > 0:
+                responses.append(random.choice(p))
+                context.append(ctx)
+        print(f'[!] collect {len(responses)} samples for training the topic predictor')
+            
+        self.data = []
+        for context, response in tqdm(list(zip(context, responses))):
+            ids = self.vocab.encode(context)
+            self.data.append({
+                'ids': ids,
+                'label': self.wordnet.index(response),
+            })
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        if len(bundle['ids']) > self.max_len:
+            cut_size = len(bundle['ids']) - self.max_len + 1    # ignore [CLS]
+            context_ids = torch.LongTensor([bundle['ids'][0]] + bundle['ids'][cut_size:])
+        else:
+            context_ids = torch.LongTensor(bundle['ids'])
+        return context_ids, bundle['label']
+    
+    def collate(self, batch):
+        ids, label = [], []
+        for i in batch:
+            ids.append(torch.LongTensor(i[0]))
+            label.append(i[1])
+        ids = pad_sequence(ids, batch_first=True, padding_value=self.pad)
+        attn_mask_index = ids.nonzero().tolist()
+        attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+        attn_mask = torch.zeros_like(ids)
+        attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+        label = torch.LongTensor(label)
+        if torch.cuda.is_available():
+            ids, attn_mask, label = ids.cuda(), attn_mask.cuda(), label.cuda()
+        return ids, attn_mask, label
+            
+    def save_pickle(self):
+        torch.save(self.data, self.pp_path)
+        print(f'[!] save dataset into {self.pp_path}')
+    
 class BERTIRDataset(Dataset):
 
     '''

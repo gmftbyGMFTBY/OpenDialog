@@ -2,6 +2,15 @@ from header import *
 from utils import *
 from dataloader import *
 
+def load_prediction_greedy_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    data = TopicPredictDataset(path, mode=args['mode'], max_len=args['src_len_size'])
+    train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+    iter_ = DataLoader(data, sampler=train_sampler, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate)
+    if not os.path.exists(data.pp_path):
+        data.save_pickle()
+    return iter_
+
 def load_seq2seq_trs_dataset(args):
     zh_tokenizer = False
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'

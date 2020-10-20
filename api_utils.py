@@ -9,7 +9,7 @@ def parser_args_api():
     '''
     parser = argparse.ArgumentParser(description='flask chatting mode')
     parser.add_argument('--model', type=str, default='bertretrieval')
-    parser.add_argument('--gpu_id', type=int, default=0)
+    parser.add_argument('--gpu_id', type=str, default='0')
     parser.add_argument('--chat_mode', type=int, default=0)
     parser.add_argument('--multi_turn_size', type=int, default=5)
     parser.add_argument('--verbose', dest='verbose', action='store_true')

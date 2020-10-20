@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ./run_self_play.sh <cuda_id>
-CUDA_VISIBLE_DEVICES=$1 python self-play.py \
+CUDA_VISIBLE_DEVICES=$1 python self_play.py \
     --retrieval_model bertretrieval \
-    --method greedy \
-    --max_step 10 \
-    --seed 20 \
+    --method clustergreedy \
+    --max_step 30 \
+    --seed 50 \
     --multi_gpu $1 \
     --lang zh \
     --mode test \
     --history_length 2 \
-    --min_topic_length 3 \
-    --max_topic_length 5 \
-    --talk_samples 64 | tee rest/self_play.txt
+    --min_topic_length 6 \
+    --max_topic_length 7 \
+    --talk_samples 128 | tee rest/self_play.txt
