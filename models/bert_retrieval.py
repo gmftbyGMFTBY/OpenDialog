@@ -422,7 +422,7 @@ class BERTRetrievalClusterGreedyAgent(BERTRetrievalAgent):
         self.wordnet = wordnet
         self.args['talk_samples'] = talk_samples
         self.args['num_candidate'] = 5
-        self.args['cluster_width'] = 50
+        self.args['cluster_width'] = 25
         self.w2v = gensim.models.KeyedVectors.load_word2vec_format(
             'data/chinese_w2v_base.txt', binary=False
         )

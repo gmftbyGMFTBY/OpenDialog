@@ -13,7 +13,7 @@ def filter_(msg):
         msg = re.sub(i, '', msg)
     return msg
 
-def read_file():
+def read_file(path):
     data = []
     def load(path):
         data_ = []
@@ -32,19 +32,17 @@ def read_file():
                         continue
                     data_.append(c[-10:])
         return data_
-    data.extend(load('train_.txt'))
-    data.extend(load('test.txt'))
-    data.extend(load('dev.txt'))
+    data.extend(load(path))
     return data
 
-def write_file(data):
+def write_file(data, path):
     print(f'[!] begin write file train.txt')
-    with open('train.txt', 'w') as f:
+    with open(path, 'w') as f:
         for i in tqdm(data):
             for j in i:
                 f.write(f'{j}\n')
             f.write('\n')
 
 if __name__ == "__main__":
-    data = read_file()
-    write_file(data)
+    data = read_file('train_.txt')
+    write_file('train.txt')

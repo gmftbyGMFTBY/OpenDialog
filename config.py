@@ -74,7 +74,7 @@ model_parameters = {
     'gpt2v2rl': [('multi_gpu',), {'lang': 'lang', 'run_mode': 'mode'}],
     'gpt2gan': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang'}],
     'transformers': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank', 'vocab': 'vocab'}],
-    'bertirbi': [('multi_gpu',), {'run_mode': 'mode', 'local_rank': 'local_rank'}],
+    'bertirbi': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank'}],
 }
 
 # ========== load the config by the utils functions ========== #

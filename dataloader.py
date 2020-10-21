@@ -827,9 +827,7 @@ class BERTMCDataset(Dataset):
         
 class BERTIRBIDataset(Dataset):
     
-    '''test mode batch size must be 1'''
-    
-    def __init__(self, path, mode='train', max_len=300, samples=9):
+    def __init__(self, path, mode='train', max_len=300):
         self.mode = mode
         self.max_len = max_len
         data = read_text_data(path)
@@ -841,95 +839,48 @@ class BERTIRBIDataset(Dataset):
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
         self.data = []
-        if mode in ['train', 'dev']:
-            d_ = [(context, response) for context, response in data]
-            for context, response in tqdm(d_):
-                item = self.vocab.batch_encode_plus([context, response])
-                cid, cid_mask = item['input_ids'][0], item['attention_mask'][0]
-                rid, rid_mask = item['input_ids'][1], item['attention_mask'][1]
-                cid, cid_mask = self._length_limit(cid, cid_mask)
-                rid, rid_mask = self._length_limit(rid, rid_mask)
-                self.data.append({
-                    'cid': cid,
-                    'rid': rid,
-                    'cid_mask': cid_mask,
-                    'rid_mask': rid_mask,
-                })
-        else:
-            d_ = []
-            responses = [i[1] for i in data]
-            for i in tqdm(data):
-                context, response = i[0], i[1]
-                negative = generate_negative_samples(
-                    response, responses, samples=samples
-                )
-                d_.append((context, [response] + negative))
-            for context, response in tqdm(d_):
-                item = self.vocab.batch_encode_plus([context] + response)
-                cid, cid_mask = item['input_ids'][0], item['attention_mask'][0]
-                cid, cid_mask = self._length_limit(cid, cid_mask)
-                rids, rids_mask = [], []
-                for sample_ids, sample_mask in zip(item['input_ids'][1:], item['attention_mask'][1:]):
-                    sample_ids, sample_mask = self._length_limit(sample_ids, sample_mask)
-                    rids.append(sample_ids)
-                    rids_mask.append(sample_mask)
-                self.data.append({
-                    'cid': cid,
-                    'cid_mask': cid_mask,
-                    'rids': rids,
-                    'rids_mask': rids_mask,
-                })
+        contexts = [' [SEP] '.join(i[:-1]) for i in data]
+        responses = [i[-1] for i in data]
+        for context, response in tqdm(list(zip(contexts, responses))):
+            item = self.vocab.batch_encode_plus([context, response])
+            cid, rid = item['input_ids']
+            cid, rid = self._length_limit(cid), self._length_limit(rid)
+            self.data.append({'cid': cid, 'rid': rid})
                 
-    def _length_limit(self, ids, ids_mask):
+    def _length_limit(self, ids):
         if len(ids) > self.max_len:
             ids = [ids[0]] + ids[-(self.max_len-1):]
-            ids_mask = ids_mask[-self.max_len:]    # all 1
-        return ids, ids_mask
+        return ids
                 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, i):
         bundle = self.data[i]
-        if self.mode in ['train', 'dev']:
-            cid = torch.LongTensor(bundle['cid'])
-            cid_mask = torch.LongTensor(bundle['cid_mask'])
-            rid = torch.LongTensor(bundle['rid'])
-            rid_mask = torch.LongTensor(bundle['rid_mask'])
-        else:
-            cid = torch.LongTensor(bundle['cid'])
-            cid_mask = torch.LongTensor(bundle['cid_mask'])
-            rid = [torch.LongTensor(i) for i in bundle['rids']]
-            rid_mask = [torch.LongTensor(i) for i in bundle['rids_mask']]
-        return cid, rid, cid_mask, rid_mask 
+        cid = torch.LongTensor(bundle['cid'])
+        rid = torch.LongTensor(bundle['rid'])
+        return cid, rid
     
     def save_pickle(self):
         data = torch.save(self.data, self.pp_path)
         print(f'[!] save dataset into {self.pp_path}')
         
+    def generate_mask(self, ids):
+        attn_mask_index = ids.nonzero().tolist()
+        attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+        attn_mask = torch.zeros_like(ids)
+        attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+        return attn_mask
+        
     def collate(self, batch):
-        cid, cid_mask, rid, rid_mask = [], [], [], []
-        if self.mode == 'train':
-            for i in batch:
-                cid.append(i[0])
-                rid.append(i[1])
-                cid_mask.append(i[2])
-                rid_mask.append(i[3])
-            cid = pad_sequence(cid, batch_first=True, padding_value=self.pad)
-            cid_mask = pad_sequence(cid_mask, batch_first=True, padding_value=0)
-            rid = pad_sequence(rid, batch_first=True, padding_value=self.pad)
-            rid_mask = pad_sequence(rid_mask, batch_first=True, padding_value=0)
-        else:
-            assert len(batch) == 1, f'[!] test mode batch size must be 1'
-            batch = batch[0]
-            cid, rid, cid_mask, rid_mask = batch[0], batch[1], batch[2], batch[3]
-            cid = cid.unsqueeze(0)    # [1, S]
-            cid_mask = cid_mask.unsqueeze(0)    # [1, S]
-            rid = pad_sequence(rid, batch_first=True, padding_value=self.pad)
-            rid_mask = pad_sequence(rid, batch_first=True, padding_value=0)
+        cid, rid = [i[0] for i in batch], [i[1] for i in batch]
+        cid = pad_sequence(cid, batch_first=True, padding_value=self.pad)
+        rid = pad_sequence(rid, batch_first=True, padding_value=self.pad)
+        cid_mask = self.generate_mask(cid)
+        rid_mask = self.generate_mask(rid)
         if torch.cuda.is_available():
             cid, rid, cid_mask, rid_mask = cid.cuda(), rid.cuda(), cid_mask.cuda(), rid_mask.cuda()
-        return cid, rid, cid_mask, rid_mask   
+        return cid, rid, cid_mask, rid_mask
 
 class TopicPredictDataset(Dataset):
     

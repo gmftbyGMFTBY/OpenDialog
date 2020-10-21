@@ -126,13 +126,16 @@ if __name__ == "__main__":
     
     # src and tgt
     sources = random.sample(topic_words, 300)
-    targets = random.sample(list(set(topic_words) - set(sources)), 300)
+    targets = random.sample(topic_words, 300)
     
     counter, avg_step = 0, []
     with open(args['recoder'], 'w') as f:
         args['recoder'] = f
         for source, target in tqdm(list(zip(sources, targets))):
-            done, step =  main(source, target, **args)
+            try:
+                done, step = main(source, target, **args)
+            except:
+                continue
             if done:
                 counter += 1
                 avg_step.append(step)

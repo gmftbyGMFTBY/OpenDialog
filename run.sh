@@ -59,18 +59,20 @@ elif [ $mode = 'train' ]; then
         --dataset $dataset \
         --model $model \
         --mode train \
-        --batch_size 64 \
+        --batch_size 32 \
         --n_vocab 80000 \
-        --epoch 5 \
+        --epoch 10 \
         --seed 50 \
         --src_len_size 256 \
         --tgt_len_size 50 \
         --multi_gpu $cuda \
         --lang $lang
 elif [ $mode = 'test' ]; then
-    one_batch_model=(kwgpt2 pfgpt2 gpt2gan lccc multigpt2 when2talk bertirbi)
+    one_batch_model=(kwgpt2 pfgpt2 gpt2gan lccc multigpt2 when2talk)
     if [[ ${one_batch_model[@]} =~ $model ]]; then
         batch_size=1
+    elif [ $model = 'bertirbi' ]; then
+        batch_size=10
     else
         batch_size=32
     fi

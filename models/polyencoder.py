@@ -45,7 +45,9 @@ class PolyEncoder(nn.Module):
     
 class BERTBiEncoder(nn.Module):
     
-    '''During training, the other elements in the batch are seen as the negative samples, which will lead to the fast training speed. More details can be found in paper: https://arxiv.org/pdf/1905.01969v2.pdf'''
+    '''During training, the other elements in the batch are seen as the negative samples, which will lead to the fast training speed. More details can be found in paper: https://arxiv.org/pdf/1905.01969v2.pdf
+    reference: https://github.com/chijames/Poly-Encoder/blob/master/encoder.py
+    '''
     
     def __init__(self, share=False):
         super(BERTBiEncoder, self).__init__()
@@ -65,27 +67,96 @@ class BERTBiEncoder(nn.Module):
             rid_rep = self.can_encoder(rid, rid_mask)
         return cid_rep, rid_rep
         
-    def forward(self, cid, rid, cid_mask, rid_mask):
+    def forward(self, cid, rid, cid_mask, rid_mask, loss=True):
         batch_size = cid.shape[0]
         assert batch_size > 1, f'[!] batch size must bigger than 1, cause other elements in the batch will be seen as the negative samples'
         cid_rep, rid_rep = self._encode(cid, rid, cid_mask, rid_mask)
         # cid_rep/rid_rep: [B, 768]
         dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B, B]
-        # use half for supporting the apex
-        mask = to_cuda(torch.eye(batch_size)).half()    # [B, B]
-        # calculate accuracy
-        acc_num = (F.softmax(dot_product, dim=-1).max(dim=-1)[1] == torch.LongTensor(torch.arange(batch_size)).cuda()).sum().item()
-        acc = acc_num / batch_size
-        loss = F.log_softmax(dot_product, dim=-1) * mask
-        loss = (-loss.sum(dim=1)).mean()
-        return loss, acc
+        if loss:
+            # use half for supporting the apex
+            mask = to_cuda(torch.eye(batch_size)).half()    # [B, B]
+            # calculate accuracy
+            acc_num = (F.softmax(dot_product, dim=-1).max(dim=-1)[1] == torch.LongTensor(torch.arange(batch_size)).cuda()).sum().item()
+            acc = acc_num / batch_size
+            # calculate the loss
+            loss = F.log_softmax(dot_product, dim=-1) * mask
+            loss = (-loss.sum(dim=1)).mean()
+            return loss, acc
+        else:
+            return F.softmax(dot_product, dim=-1)
+    
+class BERTBiCompEncoder(nn.Module):
+    
+    '''During training, the other elements in the batch are seen as the negative samples, which will lead to the fast training speed. More details can be found in paper: https://arxiv.org/pdf/1905.01969v2.pdf
+    reference: https://github.com/chijames/Poly-Encoder/blob/master/encoder.py
+    '''
+    
+    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.2, share=False):
+        super(BERTBiCompEncoder, self).__init__()
+        if share:
+            self.encoder = BertEmbedding(squeeze_strategy='first')
+        else:
+            self.ctx_encoder = BertEmbedding(squeeze_strategy='first')
+            self.can_encoder = BertEmbedding(squeeze_strategy='first')
+        self.share = share
         
-    def predict(self, cid, rid, cid_mask, rid_mask):
-        cid_rep, rid_rep = self._encode(cid, rid, cid_mask, rid_mask)
-        # cid_rep: [768] -> [1, 768]; rid_rep: [B, 768]
-        dot_product = torch.matmul(cid_rep, rid_rep.t()).squeeze(0)  # [B]
-        dot_product = F.softmax(dot_product, dim=-1)
-        return dot_product
+        encoder_layer = nn.TransformerEncoderLayer(
+            768, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout
+        )
+        encoder_norm = nn.LayerNorm(d_model)
+        self.trs_encoder = nn.TransformerEncoder(
+            encoder_layer, num_encoder_layers, encoder_norm
+        )
+        
+        self.proj1 = nn.Linear(768*2, 768)
+        self.proj2 = nn.Linear(768*2, 768)
+        
+    def _encode(self, cid, rid, cid_mask, rid_mask):
+        if self.share:
+            cid_rep = self.encoder(cid, cid_mask)
+            rid_rep = self.encoder(rid, rid_mask)
+        else:
+            cid_rep = self.ctx_encoder(cid, cid_mask)
+            rid_rep = self.can_encoder(rid, rid_mask)
+        return cid_rep, rid_rep
+        
+    def forward(self, cid, rid, cid_mask, rid_mask, loss=True):
+        batch_size = cid.shape[0]
+        assert batch_size > 1, f'[!] batch size must bigger than 1, cause other elements in the batch will be seen as the negative samples'
+        cid_rep, rid_rep = self._encode(cid, rid, cid_mask, rid_mask)    # [B, 768]
+        
+        # cross attention for all the candidates: [B, 768] -> [B, B, 768]
+        cross_rep = []
+        for cid_rep_ in cid_rep:
+            cid_rep_ = cid_rep_.unsqueeze(0).expand(batch_size, -1)    # [B, 768]
+            cross_rep.append(torch.cat([cid_rep_, rid_rep], dim=1))    # [B, 768*2]
+        cross_rep = torch.stack(cross_rep).permute(1, 0, 2)    # [B, B, 768*2] -> [S, B, E]
+        cross_rep = self.proj1(self.trs_encoder(cross_rep))    # [B, B, 768] -> [S, B, E]
+        cross_rep = self.proj2(
+            torch.cat(
+                [
+                    rid_rep.unsquueze(0).expand(batch_size, -1, -1),    # [B, B, 768]
+                    cross_rep,    # [B, B, 768]
+                ],
+                dim=-1,
+            )
+        )    # [B, B, 768]
+        # reconstruct rid_rep
+        cid_rep = cid_rep.unsqueeze(1)    # [B, 1, 768]
+        dot_product = torch.bmm(cir_rep, cross_rep.permute(0, 2, 1)).squeeze(1)    # [B, B]
+        if loss:
+            # use half for supporting the apex
+            mask = to_cuda(torch.eye(batch_size)).half()    # [B, B]
+            # calculate accuracy
+            acc_num = (F.softmax(dot_product, dim=-1).max(dim=-1)[1] == torch.LongTensor(torch.arange(batch_size)).cuda()).sum().item()
+            acc = acc_num / batch_size
+            # calculate the loss
+            loss = F.log_softmax(dot_product, dim=-1) * mask
+            loss = (-loss.sum(dim=1)).mean()
+            return loss, acc
+        else:
+            return F.softmax(dot_product, dim=-1)    # [B, B]
     
 class PolyEncoderAgent(RetrievalBaseAgent):
     
@@ -177,7 +248,7 @@ class PolyEncoderAgent(RetrievalBaseAgent):
     
 class BERTBiEncoderAgent(RetrievalBaseAgent):
     
-    def __init__(self, multi_gpu, run_mode='train', local_rank=0, kb=True):
+    def __init__(self, multi_gpu, total_step, run_mode='train', local_rank=0, kb=True, model='no-compare'):
         super(BERTBiEncoderAgent, self).__init__(kb=kb)
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(',')))) 
@@ -186,7 +257,6 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
         self.args = {
             'lr': 5e-5,
             'grad_clip': 1.0,
-            'samples': 10,
             'multi_gpu': self.gpu_ids,
             'talk_samples': 256,
             'vocab_file': 'bert-base-chinese',
@@ -196,14 +266,34 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'local_rank': local_rank,
             'pool': False,
             'share_bert': True,
+            'warmup_steps': 16000,
+            'total_step': total_step,
+            'model': model,
+            'num_encoder_layers': 1,
+            'dim_feedforward': 512,
+            'nhead': 8,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
-        self.model = BERTBiEncoder(self.args['share_bert'])
+        if model == 'no-compare':
+            self.model = BERTBiEncoder(self.args['share_bert'])
+        else:
+            self.model = BERTBiCompEncoder(
+                self.args['nhead'], 
+                self.args['dim_feedforward'], 
+                self.args['num_encoder_layers'], 
+                dropout=self.args['dropout'], 
+                share=self.args['share_bert'],
+            )
         if torch.cuda.is_available():
             self.model.cuda()
         self.optimizer = transformers.AdamW(
             self.model.parameters(), 
             lr=self.args['lr'],
+        )
+        self.scheduler = transformers.get_linear_schedule_with_warmup(
+            self.optimizer, 
+            num_warmup_steps=self.args['warmup_steps'], 
+            num_training_steps=total_step,
         )
         if run_mode == 'train':
             self.model, self.optimizer = amp.initialize(
@@ -226,41 +316,54 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             cid, rid, cid_mask, rid_mask = batch
             
             self.optimizer.zero_grad()
-            loss, acc = self.model(cid, rid, cid_mask, rid_mask)    # [B, 2]
+            loss, acc = self.model(cid, rid, cid_mask, rid_mask)
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                 scaled_loss.backward()
             clip_grad_norm_(amp.master_params(self.optimizer), self.args['grad_clip'])
             self.optimizer.step()
+            self.scheduler.step()
 
             total_loss += loss.item()
             total_acc += acc
             batch_num += 1
             
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Loss', total_loss/batch_num, idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunLoss', loss.item(), idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/Acc', total_acc/batch_num, idx)
-            recoder.add_scalar(f'train-epoch-L{self.args["local_rank"]}-{idx_}/RunAcc', acc, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Acc', total_acc/batch_num, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', acc, idx)
 
             pbar.set_description(f'[!] loss: {round(loss.item(), 4)}|{round(total_loss/batch_num, 4)}; acc: {round(acc, 4)}|{round(total_acc/batch_num, 4)}')
-        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Loss', total_loss/batch_num, idx_)
-        recoder.add_scalar(f'train-whole-L{self.args["local_rank"]}/Acc', total_acc/batch_num, idx_)
+        recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
+        recoder.add_scalar(f'train-whole/Acc', total_acc/batch_num, idx_)
         return round(total_loss / batch_num, 4)
     
     @torch.no_grad()
     def test_model(self, test_iter, mode='test', recoder=None, idx_=0):
         '''there is only one context in the batch, and response are the candidates that are need to reranked; batch size is the self.args['samples']; the groundtruth is the first one.'''
         self.model.eval()
-        rest = []
+        r1, r2, r5, r10, counter, mrr = 0, 0, 0, 0, 0, []
         pbar = tqdm(test_iter)
-        for idx, batch in enumerate(pbar):
+        for idx, batch in tqdm(list(enumerate(pbar))):
             cid, rid, cid_mask, rid_mask = batch
             batch_size = len(rid)
-            assert batch_size == self.args['samples'], f'samples attribute must be the same as the batch size'
-            dot_product = self.model.predict(cid, rid, cid_mask, rid_mask)
-            
-            preds = dot_product.tolist()    # [10]
-            preds = np.argsort(preds, axis=0)[::-1]
-            rest.append(([0], preds.tolist()))
-        p_1, r2_1, r10_1, r10_2, r10_5, MAP, MRR = cal_ir_metric(rest)
-        print(f'[TEST] P@1: {p_1}; R2@1: {r2_1}; R10@1: {r10_1}; R10@2: {r10_2}; R10@5: {r10_5}; MAP: {MAP}; MRR: {MRR}')
-        return 0.
+            if batch_size != 10:
+                continue
+            dot_product = self.model(cid, rid, cid_mask, rid_mask, loss=False).cpu()    # [B, B]
+            helper = torch.arange(10).unsqueeze(1)
+            r1 += (torch.topk(dot_product, 1, dim=1)[1] == helper).sum().item()
+            r2 += (torch.topk(dot_product, 2, dim=1)[1] == helper).sum().item()
+            r5 += (torch.topk(dot_product, 5, dim=1)[1] == helper).sum().item()
+            r10 += (torch.topk(dot_product, 10, dim=1)[1] == helper).sum().item()
+            preds = torch.argsort(dot_product, dim=1).tolist()    # [B, B]
+            counter += batch_size
+            # mrr
+            for idx, logit in enumerate(dot_product.numpy()):
+                y_true = np.zeros(len(logit))
+                y_true[idx] = 1
+                mrr.append(label_ranking_average_precision_score([y_true], [logit]))
+        r1, r2, r5, r10, mrr = round(r1/counter, 4), round(r2/counter, 4), round(r5/counter, 4), round(r10/counter, 4), round(np.mean(mrr), 4)
+        print(f'r1@100: {r1}; r2@100: {r2}; r5@100: {r5}; r10@100: {r10}; mrr: {mrr}')
+    
+    @torch.no_grad()
+    def talk(self):
+        pass
