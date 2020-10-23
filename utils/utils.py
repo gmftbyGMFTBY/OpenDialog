@@ -28,6 +28,39 @@ def read_annotation(path):
             scores.append(line)
     return scores
 
+def read_retrieval_data_train(path):
+    '''for douban300w; e-commerce dataset'''
+    with open(path) as f:
+        dataset = []
+        for line in f.readlines():
+            line = line.strip().split('\t')
+            label, ctx, res = int(line[0]), line[1:-1], line[-1]
+            ctx = ' [SEP] '.join([''.join(i.split()) for i in ctx])
+            res = ''.join(res.split())
+            if label == 1:
+                dataset.append((ctx, res))
+        return dataset
+    
+def read_retrieval_data_test(path):
+    '''for douban300w; e-commerce dataset'''
+    with open(path) as f:
+        dataset = []
+        lines = f.readlines()
+        for idx in range(0, len(lines), 10):
+            session, label1 = [], 0
+            for line in lines[idx:idx+10]:
+                line = line.strip().split('\t')
+                label, ctx, res = int(line[0]), line[1:-1], line[-1]
+                label1 += label
+                if label1 > 1:
+                    raise Exception(f'[!] error when loading the test dataset {path}')
+                ctx = ' [SEP] '.join([''.join(i.split()) for i in ctx])
+                res = ''.join(res.split()) 
+                session.append((label, res))
+            session = (ctx, session)
+            dataset.append(session)
+        return dataset
+
 def read_text_data_noparallel(path):
     with open(path) as f:
         data = f.read().split('\n')

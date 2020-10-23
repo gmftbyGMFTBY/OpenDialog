@@ -825,6 +825,91 @@ class BERTMCDataset(Dataset):
             pickle.dump(self.data, f)
         print(f'[!] save dataset into {self.pp_path}')
         
+class RetrievalDataset(Dataset):
+    
+    '''Only for Douban300w and E-Commerce datasets; test batch size must be 1'''
+    
+    def __init__(self, path, mode='train', max_len=300):
+        self.mode = mode
+        self.max_len = max_len
+        if mode == 'train':
+            data = read_retrieval_data_train(path)
+        else:
+            data = read_retrieval_data_test(path)
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
+        self.pp_path = f'{os.path.splitext(path)[0]}_irbi.pt'
+        if os.path.exists(self.pp_path):
+            self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data = []
+        if mode in ['train', 'dev']:
+            contexts = [i[0] for i in data]
+            responses = [i[1] for i in data]
+            for context, response in tqdm(list(zip(contexts, responses))):
+                item = self.vocab.batch_encode_plus([context, response])
+                cid, rid = item['input_ids']
+                cid, rid = self._length_limit(cid), self._length_limit(rid)
+                self.data.append({'cid': cid, 'rid': rid})
+        else:
+            for context, session in tqdm(data):
+                labels, responses = [i[0] for i in session], [i[1] for i in session]
+                item = self.vocab.batch_encode_plus([context] + responses)['input_ids']
+                cid, rid = item[0], item[1:]
+                cid = self._length_limit(cid)
+                rids = [self._length_limit(i) for i in rid]
+                self.data.append({'cid': cid, 'rids': rids, 'labels': labels})
+                
+    def _length_limit(self, ids):
+        if len(ids) > self.max_len:
+            ids = [ids[0]] + ids[-(self.max_len-1):]
+        return ids
+                
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        if self.mode in ['train', 'dev']:
+            cid = torch.LongTensor(bundle['cid'])
+            rid = torch.LongTensor(bundle['rid'])
+            return cid, rid
+        else:
+            cid = torch.LongTensor(bundle['cid'])
+            rids = [torch.LongTensor(i) for i in bundle['rids']]
+            return cid, rids
+    
+    def save_pickle(self):
+        data = torch.save(self.data, self.pp_path)
+        print(f'[!] save dataset into {self.pp_path}')
+        
+    def generate_mask(self, ids):
+        attn_mask_index = ids.nonzero().tolist()
+        attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+        attn_mask = torch.zeros_like(ids)
+        attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+        return attn_mask
+        
+    def collate(self, batch):
+        if self.mode in ['train', 'dev']:
+            cid, rid = [i[0] for i in batch], [i[1] for i in batch]
+            cid = pad_sequence(cid, batch_first=True, padding_value=self.pad)
+            rid = pad_sequence(rid, batch_first=True, padding_value=self.pad)
+            cid_mask = self.generate_mask(cid)
+            rid_mask = self.generate_mask(rid)
+            if torch.cuda.is_available():
+                cid, rid, cid_mask, rid_mask = cid.cuda(), rid.cuda(), cid_mask.cuda(), rid_mask.cuda()
+            return cid, rid, cid_mask, rid_mask
+        else:
+            assert len(batch) == 1, f'[!] test bacth size must be 1'
+            cid, rids = batch[0]
+            rids = pad_sequence(rids, batch_first=True, padding_value=self.pad)
+            rids_mask = self.generate_mask(rids)
+            if torch.cuda.is_available():
+                cid, rids, rids_mask = cid.cuda(), rids.cuda(), rids_mask.cuda()
+            return cid, rids, rids_mask
+        
 class BERTIRBIDataset(Dataset):
     
     def __init__(self, path, mode='train', max_len=300):

@@ -146,6 +146,28 @@ class RetrievalBaseAgent:
 
     def test_model(self, test_iter, path):
         raise NotImplementedError
+        
+    def process_utterances_biencoder(self, topic, msgs, max_len=0):
+        def _length_limit(ids):
+            if len(ids) > max_len:
+                ids = [ids[0]] + ids[-(max_len-1):]
+            return ids
+        utterances = self.searcher.search(msgs, samples=self.args['talk_samples'], topic=topic)
+        utterances = [i['utterance'] for i in utterances]
+        utterances = list(set(utterances) - set(self.history))
+        inpt_ids = self.vocab.batch_encode_plus([msgs] + utterances)['input_ids']
+        context_inpt_ids, response_inpt_ids = inpt_ids[0], inpt_ids[1:]
+        context_inpt_ids = torch.LongTensor(_length_limit(context_inpt_ids))
+        response_inpt_ids = [torch.LongTensor(_length_limit(i)) for i in response_inpt_ids]
+        response_inpt_ids = pad_sequence(response_inpt_ids, batch_first=True, padding_value=self.args['pad'])
+        attn_mask_index = response_inpt_ids.nonzero().tolist()
+        attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+        attn_mask = torch.zeros_like(response_inpt_ids)
+        attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+        
+        if torch.cuda.is_available():
+            context_inpt_ids, response_inpt_ids, attn_mask = context_inpt_ids.cuda(), response_inpt_ids.cuda(), attn_mask.cuda()
+        return utterances, context_inpt_ids, response_inpt_ids, attn_mask
 
     def process_utterances(self, topic, msgs, max_len=0, context=True):
         '''Process the utterances searched by Elasticsearch; input_ids/token_type_ids/attn_mask'''

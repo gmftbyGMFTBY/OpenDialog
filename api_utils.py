@@ -39,6 +39,10 @@ def flask_load_agent(model, gpu, logger):
         # [model_type]: bertmc -> mc; bertmcf -> mcf
         agent = BERTMCAgent(args['multi_gpu'], kb=False, model_type='mc')
         agent.load_model(f'ckpt/zh50w/bertmc/best.pt')
+    elif args['model'] in ['bertirbi', 'bertirbicomp']:
+        model = 'no-compare' if args['model'] == 'bertirbi' else 'compare'
+        agent = BERTBiEncoderAgent(args['multi_gpu'], None, run_mode='test', model=model)
+        agent.load_model(f'ckpt/zh50w/{args["model"]}/best.pt')
     elif args['model'] == 'bertretrieval_multiview':
         agent = BERTMULTIVIEWAgent(args['multi_gpu'], kb=False)
         agent.load_model(f'ckpt/zh50w/bertretrieval_multiview/best.pt')

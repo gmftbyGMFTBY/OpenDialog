@@ -255,7 +255,8 @@ def load_bert_ir_cl_dataset(args):
 
 def load_bert_irbi_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'
-    data = BERTIRBIDataset(path, mode=args['mode'], max_len=args['src_len_size'])
+    # data = BERTIRBIDataset(path, mode=args['mode'], max_len=args['src_len_size'])
+    data = RetrievalDataset(path, mode=args['mode'], max_len=args['src_len_size'])
     if args['mode'] in ['train', 'dev']:
         train_sampler = torch.utils.data.distributed.DistributedSampler(data)
         iter_ = DataLoader(
@@ -269,6 +270,25 @@ def load_bert_irbi_dataset(args):
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
+    return iter_
+
+def load_bert_irbicomp_dataset(args):
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    data = RetrievalDataset(path, mode=args['mode'], max_len=args['src_len_size'])
+    if args['mode'] in ['train', 'dev']:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data)
+        iter_ = DataLoader(
+            data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate, 
+            sampler=train_sampler
+        )
+    else:
+        iter_ = DataLoader(
+            data, shuffle=False, batch_size=args['batch_size'], collate_fn=data.collate,
+        )
+    if not os.path.exists(data.pp_path):
+        data.save_pickle()
+    args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
+    args['bimodel'] = 'compare'
     return iter_
 
 def load_bert_ir_dataset(args):
