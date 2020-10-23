@@ -61,7 +61,7 @@ class PolyEncoder(nn.Module):
         # POLY ENCODER ATTENTION
         # weight    [B, M]
         weights = F.softmax(
-            torch.matmul(rid_rep, cid_rep.t())
+            torch.matmul(rid_rep, cid_rep.t()),
             dim=-1,
         )
         # context embedding
@@ -155,6 +155,8 @@ class BERTBiCompEncoder(nn.Module):
     
     '''During training, the other elements in the batch are seen as the negative samples, which will lead to the fast training speed. More details can be found in paper: https://arxiv.org/pdf/1905.01969v2.pdf
     reference: https://github.com/chijames/Poly-Encoder/blob/master/encoder.py
+    
+    Set the different learning ratio
     '''
     
     def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.2, share=False):
@@ -193,11 +195,9 @@ class BERTBiCompEncoder(nn.Module):
         cid_rep, rid_rep = self._encode(cid.unsqueeze(0), rid, None, rid_mask)
         cid_rep = cid_rep.squeeze(0)    # [E]
         cross_rep = torch.cat([cid_rep.unsqueeze(0).expand(batch_size, -1), rid_rep], dim=1)    # [S, E*2]
-        cross_rep = self.proj1(
-            self.trs_encoder(
-                cross_rep.unsqueeze(1),
-            ).squeeze(1)
-        )    # [S, E*2] -> [S, E] 
+        cross_rep = self.trs_encoder(
+            self.proj1(cross_rep).unsqueeze(1),
+        ).squeeze(1)    # [S, E*2] -> [S, E] 
         cross_rep = self.proj2(
             torch.cat(
                 [
@@ -262,6 +262,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         self.args = {
             'lr': 5e-5,
+            'lr_': 5e-4,
             'grad_clip': 1.0,
             'multi_gpu': self.gpu_ids,
             'talk_samples': 256,
@@ -301,14 +302,37 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
         if torch.cuda.is_available():
             self.model.cuda()
         if run_mode == 'train':
-            self.optimizer = transformers.AdamW(
-                self.model.parameters(), 
-                lr=self.args['lr'],
-            )
+            if model != 'compare':
+                self.optimizer = transformers.AdamW(
+                    self.model.parameters(), 
+                    lr=self.args['lr'],
+                )
+            else:
+                self.optimizer = transformers.AdamW(
+                    [
+                        {
+                            'params': self.model.encoder.parameters(),
+                        },
+                        {
+                            'params': self.model.trs_encoder.parameters(), 
+                            'lr': self.args['lr_'],
+                        },
+                        {
+                            'params': self.model.proj1.parameters(), 
+                            'lr': self.args['lr_'],
+                        },
+                        {
+                            'params': self.model.proj2.parameters(), 
+                            'lr': self.args['lr_'],
+                        },
+                    ], 
+                    lr=self.args['lr'],
+                )
+                print(f'[!] set the different learning ratios for comparsion module')
             self.model, self.optimizer = amp.initialize(
                 self.model, 
                 self.optimizer,
-                opt_level=self.args['amp_level']
+                opt_level=self.args['amp_level'],
             )
             self.scheduler = transformers.get_linear_schedule_with_warmup(
                 self.optimizer, 
