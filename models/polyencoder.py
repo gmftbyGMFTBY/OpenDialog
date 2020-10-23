@@ -11,20 +11,19 @@ class BertEmbedding(nn.Module):
     
     '''squeeze strategy: 1. first; 2. first-m; 3. average'''
     
-    def __init__(self, squeeze_strategy='first', m=0):
+    def __init__(self, m=0):
         super(BertEmbedding, self).__init__()
         self.model = BertModel.from_pretrained('bert-base-chinese')
-        self.squeeze_strategy = squeeze_strategy
         self.m = m
 
     def forward(self, ids, attn_mask, strategy='first'):
         '''convert ids to embedding tensor; Return: [B, 768]'''
         embd = self.model(ids, attention_mask=attn_mask)[0]    # [B, S, 768]
-        if self.squeeze_strategy == 'first':
+        if strategy == 'first':
             rest = embd[:, 0, :]
-        elif self.squeeze_strategy == 'first-m':
+        elif strategy == 'first-m':
             rest = embd[:, :self.m, :]    # [B, M, 768]
-        elif self.squeeze_strategy == 'average':
+        elif strategy == 'average':
             rest = embd.mean(dim=1)    # [B, 768]
         else:
             raise Exception(f'[!] Unknow squeeze strategy {self.squeeze_strategy}')
@@ -35,10 +34,10 @@ class PolyEncoder(nn.Module):
     def __init__(self, share=True, m=16):
         super(PolyEncoder, self).__init__()
         if share:
-            self.encoder = BertEmbedding(squeeze_strategy='first-m', m=m)
+            self.encoder = BertEmbedding(m=m)
         else:
-            self.ctx_encoder = BertEmbedding(squeeze_strategy='first-m', m=m)
-            self.can_encoder = BertEmbedding(squeeze_strategy='first-m', m=m)
+            self.ctx_encoder = BertEmbedding(m=m)
+            self.can_encoder = BertEmbedding()
         self.share = share
         
     def _encode(self, cid, rid, cid_mask, rid_mask):
@@ -111,10 +110,10 @@ class BERTBiEncoder(nn.Module):
     def __init__(self, share=False):
         super(BERTBiEncoder, self).__init__()
         if share:
-            self.encoder = BertEmbedding(squeeze_strategy='first')
+            self.encoder = BertEmbedding()
         else:
-            self.ctx_encoder = BertEmbedding(squeeze_strategy='first')
-            self.can_encoder = BertEmbedding(squeeze_strategy='first')
+            self.ctx_encoder = BertEmbedding()
+            self.can_encoder = BertEmbedding()
         self.share = share
         
     def _encode(self, cid, rid, cid_mask, rid_mask):
@@ -162,22 +161,22 @@ class BERTBiCompEncoder(nn.Module):
     def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.2, share=False):
         super(BERTBiCompEncoder, self).__init__()
         if share:
-            self.encoder = BertEmbedding(squeeze_strategy='first')
+            self.encoder = BertEmbedding()
         else:
-            self.ctx_encoder = BertEmbedding(squeeze_strategy='first')
-            self.can_encoder = BertEmbedding(squeeze_strategy='first')
+            self.ctx_encoder = BertEmbedding()
+            self.can_encoder = BertEmbedding()
         self.share = share
         
         encoder_layer = nn.TransformerEncoderLayer(
-            768, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout
+            2*768, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout
         )
-        encoder_norm = nn.LayerNorm(768)
+        encoder_norm = nn.LayerNorm(2*768)
         self.trs_encoder = nn.TransformerEncoder(
             encoder_layer, num_encoder_layers, encoder_norm
         )
         
         self.proj1 = nn.Linear(768*2, 768)
-        self.proj2 = nn.Linear(768*2, 768)
+        self.layernorm = nn.LayerNorm(768)
         
     def _encode(self, cid, rid, cid_mask, rid_mask):
         if self.share:
@@ -195,18 +194,10 @@ class BERTBiCompEncoder(nn.Module):
         cid_rep, rid_rep = self._encode(cid.unsqueeze(0), rid, None, rid_mask)
         cid_rep = cid_rep.squeeze(0)    # [E]
         cross_rep = torch.cat([cid_rep.unsqueeze(0).expand(batch_size, -1), rid_rep], dim=1)    # [S, E*2]
-        cross_rep = self.trs_encoder(
-            self.proj1(cross_rep).unsqueeze(1),
-        ).squeeze(1)    # [S, E*2] -> [S, E] 
-        cross_rep = self.proj2(
-            torch.cat(
-                [
-                    rid_rep,    # [S, E]
-                    cross_rep,    # [S, E]
-                ],
-                dim=-1,
-            )
-        )    # [B, E]
+        cross_rep = self.proj1(
+            self.trs_encoder(cross_rep.unsqueeze(1)),
+        ).squeeze(1)    # [S, E*2] -> [S, E]
+        cross_rep = self.layernorm(cross_rep + rid_rep)    # [B, E]
         # cid: [E]; rid: [B, E]
         dot_product = torch.matmul(cid_rep, cross_rep.t())    # [B]
         return F.softmax(dot_product, dim=-1)    # [B]
@@ -222,18 +213,10 @@ class BERTBiCompEncoder(nn.Module):
             cid_rep_ = cid_rep_.unsqueeze(0).expand(batch_size, -1)    # [S, 768]
             cross_rep.append(torch.cat([cid_rep_, rid_rep], dim=1))    # [S, 768*2]
         cross_rep = torch.stack(cross_rep).permute(1, 0, 2)    # [B, S, 768*2] -> [S, B, E]
-        cross_rep = self.trs_encoder(
-            self.proj1(cross_rep)
+        cross_rep = self.proj1(
+            self.trs_encoder(cross_rep)
         ).permute(1, 0, 2)    # [S, B, E] -> [B, S, E]
-        cross_rep = self.proj2(
-            torch.cat(
-                [
-                    rid_rep.unsqueeze(0).expand(batch_size, -1, -1),    # [B, S, E]
-                    cross_rep,    # [B, S, E]
-                ],
-                dim=-1,
-            )
-        )    # [B, S, E]
+        cross_rep = self.layernorm(cross_rep + rid_rep.unsqueeze(0).expand(batch_size, -1, -1))    # [B, S, E]
         # reconstruct rid_rep
         cid_rep = cid_rep.unsqueeze(1)    # [B, 1, E]
         dot_product = torch.bmm(cid_rep, cross_rep.permute(0, 2, 1)).squeeze(1)    # [B, S]
@@ -262,7 +245,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         self.args = {
             'lr': 5e-5,
-            'lr_': 5e-4,
+            'lr_': 1e-4,
             'grad_clip': 1.0,
             'multi_gpu': self.gpu_ids,
             'talk_samples': 256,
@@ -277,19 +260,20 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'warmup_steps': 8000,
             'total_step': total_step,
             'model': model,
-            'num_encoder_layers': 1,
+            'num_encoder_layers': 4,
             'dim_feedforward': 512,
             'nhead': 8,
             'dropout': 0.1,
             'max_len': 256,
-            'm': 16,
+            'poly_m': 16,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         if model == 'no-compare':
             self.model = BERTBiEncoder(self.args['share_bert'])
         elif model == 'polyencoder':
             self.model = PolyEncoder(
-                share=self.args['share_bert'], m=self.args['m']
+                share=self.args['share_bert'], 
+                m=self.args['poly_m'],
             )
         else:
             self.model = BERTBiCompEncoder(
@@ -308,6 +292,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                     lr=self.args['lr'],
                 )
             else:
+                # share bert has ctx_ and can_ encoder
                 self.optimizer = transformers.AdamW(
                     [
                         {
@@ -319,10 +304,6 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                         },
                         {
                             'params': self.model.proj1.parameters(), 
-                            'lr': self.args['lr_'],
-                        },
-                        {
-                            'params': self.model.proj2.parameters(), 
                             'lr': self.args['lr_'],
                         },
                     ], 
@@ -374,33 +355,6 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
         recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
         recoder.add_scalar(f'train-whole/Acc', total_acc/batch_num, idx_)
         return round(total_loss / batch_num, 4)
-    
-    @torch.no_grad()
-    def _test_model(self, test_iter, mode='test', recoder=None, idx_=0):
-        '''there is only one context in the batch, and response are the candidates that are need to reranked; batch size is the self.args['samples']; the groundtruth is the first one.'''
-        self.model.eval()
-        r1, r2, r5, r10, counter, mrr = 0, 0, 0, 0, 0, []
-        pbar = tqdm(test_iter)
-        for idx, batch in tqdm(list(enumerate(pbar))):
-            cid, rid, cid_mask, rid_mask = batch
-            batch_size = len(rid)
-            if batch_size != self.args['samples']:
-                continue
-            dot_product = self.model(cid, rid, cid_mask, rid_mask).cpu()    # [B, B]
-            helper = torch.arange(10).unsqueeze(1)
-            r1 += (torch.topk(dot_product, 1, dim=1)[1] == helper).sum().item()
-            r2 += (torch.topk(dot_product, 2, dim=1)[1] == helper).sum().item()
-            r5 += (torch.topk(dot_product, 5, dim=1)[1] == helper).sum().item()
-            r10 += (torch.topk(dot_product, 10, dim=1)[1] == helper).sum().item()
-            preds = torch.argsort(dot_product, dim=1).tolist()    # [B, B]
-            counter += batch_size
-            # mrr
-            for idx, logit in enumerate(dot_product.numpy()):
-                y_true = np.zeros(len(logit))
-                y_true[idx] = 1
-                mrr.append(label_ranking_average_precision_score([y_true], [logit]))
-        r1, r2, r5, r10, mrr = round(r1/counter, 4), round(r2/counter, 4), round(r5/counter, 4), round(r10/counter, 4), round(np.mean(mrr), 4)
-        print(f'r1@100: {r1}; r2@100: {r2}; r5@100: {r5}; r10@100: {r10}; mrr: {mrr}')
         
     @torch.no_grad()
     def test_model(self, test_iter, mode='test', recoder=None, idx_=0):
@@ -427,7 +381,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             counter += 1
             
         r1, r2, r5, r10, mrr = round(r1/counter, 4), round(r2/counter, 4), round(r5/counter, 4), round(r10/counter, 4), round(np.mean(mrr), 4)
-        print(f'r1@100: {r1}; r2@100: {r2}; r5@100: {r5}; r10@100: {r10}; mrr: {mrr}')
+        print(f'r1@10: {r1}; r2@10: {r2}; r5@10: {r5}; r10@10: {r10}; mrr: {mrr}')
     
     @torch.no_grad()
     def talk(self, msgs, topic=None):
