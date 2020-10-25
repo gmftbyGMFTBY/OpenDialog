@@ -910,6 +910,97 @@ class RetrievalDataset(Dataset):
                 cid, rids, rids_mask = cid.cuda(), rids.cuda(), rids_mask.cuda()
             return cid, rids, rids_mask
         
+class RURetrievalDataset(Dataset):
+    
+    '''Only for Douban300w and E-Commerce datasets; test batch size must be 1'''
+    
+    def __init__(self, path, mode='train', max_len=300, max_turn_size=10):
+        self.mode = mode
+        self.max_len = max_len
+        if mode == 'train':
+            data = read_retrieval_data_sep_train(path, max_len=max_len, max_turn_size=max_turn_size)
+        else:
+            data = read_retrieval_data_sep_test(path, max_len=max_len, max_turn_size=max_turn_size)
+        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
+        self.pp_path = f'{os.path.splitext(path)[0]}_ruirbi.pt'
+        if os.path.exists(self.pp_path):
+            self.data = torch.load(self.pp_path)
+            print(f'[!] load preprocessed file from {self.pp_path}')
+            return None
+        self.data = []
+        if mode in ['train', 'dev']:
+            contexts = [i[0] for i in data]
+            responses = [i[1] for i in data]
+            for context, response in tqdm(list(zip(contexts, responses))):
+                item = self.vocab.batch_encode_plus(context + [response])['input_ids']
+                cid, rid = item[:-1], item[-1]
+                cid, rid = [self._length_limit(i) for i in cid], self._length_limit(rid)
+                self.data.append({'cid': cid, 'cid_length': len(cid), 'rid': rid})
+        else:
+            for context, session in tqdm(data):
+                labels, responses = [i[0] for i in session], [i[1] for i in session]
+                context_length = len(context)
+                item = self.vocab.batch_encode_plus(context + responses)['input_ids']
+                cid, rid = item[:context_length], item[context_length:]
+                cid = [self._length_limit(i) for i in cid]
+                rids = [self._length_limit(i) for i in rid]
+                self.data.append({'cid': cid, 'cid_length': len(cid), 'rids': rids, 'labels': labels})
+                
+    def _length_limit(self, ids):
+        if len(ids) > self.max_len:
+            ids = [ids[0]] + ids[-(self.max_len-1):]
+        return ids
+                
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        bundle = self.data[i]
+        if self.mode in ['train', 'dev']:
+            cid = [torch.LongTensor(i) for i in bundle['cid']]
+            rid = torch.LongTensor(bundle['rid'])
+            turn_length = bundle['cid_length']
+            return cid, rid, turn_length
+        else:
+            cid = [torch.LongTensor(i) for i in bundle['cid']]
+            rids = [torch.LongTensor(i) for i in bundle['rids']]
+            turn_length = bundle['cid_length']
+            return cid, rids, turn_length
+    
+    def save_pickle(self):
+        data = torch.save(self.data, self.pp_path)
+        print(f'[!] save dataset into {self.pp_path}')
+        
+    def generate_mask(self, ids):
+        attn_mask_index = ids.nonzero().tolist()
+        attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+        attn_mask = torch.zeros_like(ids)
+        attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+        return attn_mask
+        
+    def collate(self, batch):
+        if self.mode in ['train', 'dev']:
+            cid, rid, turn_length = [i[0] for i in batch], [i[1] for i in batch], [i[2] for i in batch]
+            cid = list(chain(*cid))
+            cid = pad_sequence(cid, batch_first=True, padding_value=self.pad)
+            rid = pad_sequence(rid, batch_first=True, padding_value=self.pad)
+            cid_mask = self.generate_mask(cid)
+            rid_mask = self.generate_mask(rid)
+            if torch.cuda.is_available():
+                cid, cid_mask, rid, rid_mask = cid.cuda(), cid_mask.cuda(), rid.cuda(), rid_mask.cuda()
+            return cid, turn_length, rid, cid_mask, rid_mask
+        else:
+            assert len(batch) == 1, f'[!] test batch size must be 1'
+            cid, rids, _ = batch[0]
+            cid = pad_sequence(cid, batch_first=True, padding_value=self.pad)    # [T, S]
+            cid_mask = self.generate_mask(cid)
+            rids = pad_sequence(rids, batch_first=True, padding_value=self.pad)
+            rids_mask = self.generate_mask(rids)
+            if torch.cuda.is_available():
+                cid, cid_mask, rids, rids_mask = cid.cuda(), cid_mask.cuda(), rids.cuda(), rids_mask.cuda()
+            return cid, rids, cid_mask, rids_mask
+        
 class BERTIRBIDataset(Dataset):
     
     def __init__(self, path, mode='train', max_len=300):
@@ -2307,8 +2398,12 @@ if __name__ == "__main__":
     # train_data = GPT2V2Dataset('./data/zh50w/train.txt', mode='train')
     # train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
     # ========== BERTIRBI ========== #
-    train_data = BERTIRBIDataset('data/zh50w/train.txt', mode='train')
-    train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
+    # train_data = BERTIRBIDataset('data/zh50w/train.txt', mode='train')
+    # train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
+    # ========== RURetrievalDataset ========== #
+    train_data = RURetrievalDataset('data/ecommerce/train.txt', mode='train')
+    train_iter = DataLoader(train_data, collate_fn=train_data.collate, batch_size=4)
+    train_data.save_pickle()
     # ========= ITERATE ========= # 
     for batch in tqdm(train_iter):
         ipdb.set_trace()

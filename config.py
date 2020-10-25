@@ -21,6 +21,7 @@ dataset_loader = {
     'bertretrieval_multiview': load_bert_ir_multiview_dataset,
     'bertmc': load_bert_ir_mc_dataset,
     'bertirbi': load_bert_irbi_dataset,
+    'rubertirbi': load_rubert_irbi_dataset,
     'bertirbicomp': load_bert_irbicomp_dataset,
     'polyencoder': load_bert_irbi_dataset,
     'transformer': load_seq2seq_trs_dataset,
@@ -56,6 +57,7 @@ agent_map = {
     'uni': UNIAgent,
     'bert_na': BERTNAAgent,
     'bertirbi': BERTBiEncoderAgent,
+    'rubertirbi': RUBERTBiEncoderAgent,
     'bertirbicomp': BERTBiEncoderAgent,
     'polyencoder': BERTBiEncoderAgent,
     'transformer': TransformerAgent,
@@ -79,7 +81,8 @@ model_parameters = {
     'gpt2gan': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang'}],
     'transformers': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank', 'vocab': 'vocab'}],
     'bertirbi': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank'}],
-    'polyencoder': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank'}],
+    'rubertirbi': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank'}], 
+    'polyencoder': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank', 'model': 'bimodel'}],
     'bertirbicomp': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank', 'model': 'bimodel'}],
 }
 

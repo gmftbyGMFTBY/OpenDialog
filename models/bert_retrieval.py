@@ -1,4 +1,5 @@
 from .header import *
+from .polyencoder import BERTBiEncoder
 
 '''Cross-Attention BertRetrieval'''
 
@@ -414,6 +415,8 @@ class BERTRetrievalClusterGreedyAgent(BERTRetrievalAgent):
     3. 如何选择多个簇可以看作是强化学习的任务，保证选择的多个簇有利于向着target推进并保证会话潜移的平滑性
     4. 如果用RL来选择的话，可以使用transformer将所有的候选信息全部全连接编码，通过对比的方式选择更好的一组keywords
     5. 选出来的一组keyword之间的相关性也要保证
+    
+    f(x) = g(x) + h(x)
     '''
     
     def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True, local_rank=0, wordnet=None, talk_samples=128):
@@ -422,11 +425,12 @@ class BERTRetrievalClusterGreedyAgent(BERTRetrievalAgent):
         self.wordnet = wordnet
         self.args['talk_samples'] = talk_samples
         self.args['num_candidate'] = 5
-        self.args['cluster_width'] = 25
+        self.args['cluster_width'] = 50
         self.w2v = gensim.models.KeyedVectors.load_word2vec_format(
             'data/chinese_w2v_base.txt', binary=False
         )
         self.cutter = LAC(mode='seg')
+        self.g_scorer = BERTBiEncoder(share=True)
         
     def reset(self, target, source):
         self.args['target'], self.args['current_node'] = target, source
@@ -437,29 +441,51 @@ class BERTRetrievalClusterGreedyAgent(BERTRetrievalAgent):
         '''select the keyword that most similar to the current_node as the keyword in the human response'''
         return [i for i in self.cutter.run(utterance) if i in self.w2v]
         
-    def get_cluster(self, start_nodes, size=5):
-        '''similarity is the average between the target and the current node'''
-        candidates = []
-        for start_node in start_nodes:
-            candidates.extend(
-                self.w2v.most_similar(start_node, topn=self.args['cluster_width'])
-            )
-        candidates = [i[0] for i in candidates]
-        candidates = list(set(candidates) - set(chain(*self.topic_history)))
-        if self.args['target'] in candidates:
-            return [self.args['target']]
-        similarity = [(self.w2v.similarity(self.args['target'], node), node) for node in candidates]
-        # 不应该这么算start similarity，这个相似度的目的是为了保持平滑性，这里可以参考2019 ACL Target-guided open-domain dialog system
-        # 1. PMI; 2. 网络预测
-        similarity = sorted(similarity, key=lambda x: x[0], reverse=True)
-        return [i[1] for i in similarity[:size]]
+    def get_candidates(self, start_node, size=5):
+        '''obtain a cluster of nodes which is more closer than the start node'''
+        # obtain not only the 1-hop neighboor
+        path_lengths = nx.single_source_shortest_path_length(self.wordnet, start_node, cutoff=2)
+        candidates = [node for node, length in path_lengths.items() if length <= 2]
+        dis = self.w2v.most_similar(start_node, self.args['target'])
+        # 1) closer and have the path to the target will be consider as the candidates
+        nodes = []
+        for node in candidates:
+            if self.w2v.similarity(node, self.args['target']) > dis:
+                path = nx.dijkstra_path(self.wordnet, node, self.args['target'])
+                if path:
+                    nodes.append((node, path))
+        return nodes
+    
+    def get_g_function(self, msgs, node):
+        # retrieval a bag of responses
+        utterances, context_inpt_ids, response_inpt_ids, attn_mask = self.process_utterances_biencoder([node], msgs, max_len=self.args['max_len'])
+        # average similarity
+        ipdb.set_trace()
+        scores = self.g_scorer.predict(context_inpt_ids, response_inpt_ids, attn_mask).tolist()
+        return np.mean(scores)
+    
+    def get_h_function(self, path):
+        # search the path
+        # calculate the path
+        pass
         
+    @torch.no_grad()
     def move_on_kg(self):
         '''judge whether meet the end'''
-        self.args['current_node'] = self.get_cluster(
+        candidates = self.get_candidates(
             self.args['current_node'],
             size=self.args['num_candidate'],
         )
+        g_scores = [self.get_g_function(i[0]) for i in candidates]
+        h_scores = [self.get_h_function(i[1]) for i in candidates]
+        # resort
+        scores = []
+        for g, h, candidate in candidates:
+            scores.append(((g + h)/2, candidate))
+        scores = sorted(scores, key=lambda x:x[0], reverse=True)
+        self.args['current_node'] = scores[0][1]
+        if self.args['current_node'] == self.args['target']:
+            pass
         
     @torch.no_grad()
     def talk(self, msgs):

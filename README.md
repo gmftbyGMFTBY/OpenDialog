@@ -12,6 +12,8 @@ __最新进展：__
     ./run_flask lccc <gpu_id>
     ```
     
+* 2020.10.26, 完成一批bi-encoder的检索式对话模型(bert-bi-encoder, polyencoder等)
+    
 * ...
 
 ## 使用教程
