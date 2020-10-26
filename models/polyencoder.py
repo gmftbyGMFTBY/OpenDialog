@@ -58,7 +58,7 @@ class PolyEncoder(nn.Module):
         # context embedding
         cid_rep = torch.matmul(weights, cid_rep)    # [B, M] * [M, E] -> [B, E]
         
-        dot_product = (cid_rep, rid_rep).sum(-1)  # [B, E] * [B, E] -> [B, E] -> [B]
+        dot_product = torch.diagonal(torch.matmul(cid_rep, rid_rep.t()))  # [B, E] * [B, E] -> [B, E] -> [B]
         return dot_product
         
     def forward(self, cid, rid, cid_mask, rid_mask):
