@@ -327,47 +327,110 @@ class BERTRetrievalKGGreedyAgent(BERTRetrievalAgent):
     
     '''fix the talk function for BERTRetrievalAgent
     Agent knows the whole knowledge graph path; but the other one doesn"t;
-    greedy: ACL 2019 Target-Guided Open-Domain Conversation
-    '''
+    greedy: ACL 2019 Target-Guided Open-Domain Conversation'''
     
     def __init__(self, multi_gpu, run_mode='train', lang='zh', kb=True, local_rank=0, wordnet=None, talk_samples=128):
         super(BERTRetrievalKGGreedyAgent, self).__init__(multi_gpu, run_mode=run_mode, lang=lang, kb=kb, local_rank=local_rank)
         self.topic_history = []
         self.wordnet = wordnet
         self.args['talk_samples'] = talk_samples
+        self.w2v = gensim.models.KeyedVectors.load_word2vec_format(
+            'data/chinese_w2v_base.txt', binary=False
+        )
         
-    def reset(self, target, source, path):
-        self.args['target'], self.args['current_node'], self.args['path'] = target, source, path
+    def reset(self, target, source):
+        self.args['target'], self.args['current_node'] = target, source
         self.topic_history, self.history = [source], []
         print(f'[! Reset the KG target] source: {source}; target: {target}; path: {path}')
         
-    def move_on_kg(self):
-        '''judge whether meet the end'''
-        if self.topic_history[-1] == self.args['target']:
-            return
-        self.args['current_node'] = self.args['path'][len(self.topic_history)]
-        self.topic_history.append(self.args['current_node'])
+    def search_candidates(self, msgs, nodes):
+        '''Noted that input node maybe multiple topic words
+        f(n) = g(n) + h(n)
+        1. must have the path to the target    √
+        2. compared with current node, more closer to the target    √
+        3. retrieval utterance must contain both current and candidate node
+        4. as for g(n), 1) word similarity; 2) average bag of utterances coherence
+        5. as for f(n), 2) number of the retrieval utterance based on the current node and candidate node and their corresponding average coherence; 3) RL
+        '''
+        # generate candidates
+        candidates = []
+        for node in nodes:
+            neighbors = []
+            base_dis = self.w2v.similarity(node, self.args['target'])
+            for n in self.wordnet.neighbors(node):
+                if self.w2v.similarity(n, self.args['target']) >= base_dis:
+                    continue
+                retrieval_rest = self.searcher.must_search(
+                    msgs, topic=[node, n], samples=self.args['talk_samples']
+                )
+                if not retrieval_rest:
+                    continue
+                try:
+                    path = nx.shortest_path(self.wordnet, n, self.args['target'])
+                except nx.NetworkXNoPath as e:
+                    continue
+                neighbors.append((node, n, path))
+            candidates.extend(neighbors)
+        # score the f(n) and sort
+        pass
+        
+    def move_on_kg(self, current_nodes, size=1):
+        '''current nodes are extracted from the human utterance (maybe multiple)'''
+        candidates = self.search_candidates(msgs, current_nodes)[:size]
+        return candidates
+        
+    def process_utterances(self, utterances, msgs, max_len=0):
+        '''Process the utterances searched by Elasticsearch; input_ids/token_type_ids/attn_mask'''
+        # assert lern(topic) > 0, f'[!] topic words must exists'
+        # utterances_ = self.searcher.must_search(
+        #     msgs, samples=self.args['talk_samples'], topic=topic
+        # )
+        # utterances_ = [i['utterance'] for i in utterances_]
+        # remove the utterances that in the self.history
+        # utterances_ = list(set(utterances_) - set(self.history))
+        
+        # construct inpt_ids, token_type_ids, attn_mask
+        inpt_ids = self.vocab.batch_encode_plus([msgs] + utterances_)['input_ids']
+        context_inpt_ids, responses_inpt_ids = inpt_ids[0], inpt_ids[1:]
+        context_token_type_ids = [0] * len(context_inpt_ids)
+        responses_token_type_ids = [[1] * len(i) for i in responses_inpt_ids]
+        
+        # length limitation
+        collection = []
+        for r1, r2 in zip(responses_inpt_ids, responses_token_type_ids):
+            p1, p2 = context_inpt_ids + r1[1:], context_token_type_ids + r2[1:]
+            if len(p1) > max_len:
+                cut_size = len(p1) - max_len + 1
+                p1, p2 = [p1[0]] + p1[cut_size:], [p2[0]] + p2[cut_size:]
+            collection.append((p1, p2))
+            
+        inpt_ids = [torch.LongTensor(i[0]) for i in collection]
+        token_type_ids = [torch.LongTensor(i[1]) for i in collection]
+        
+        inpt_ids = pad_sequence(inpt_ids, batch_first=True, padding_value=self.args['pad'])
+        token_type_ids = pad_sequence(token_type_ids, batch_first=True, padding_value=self.args['pad'])
+        attn_mask_index = inpt_ids.nonzero().tolist()
+        attn_mask_index_x, attn_mask_index_y = [i[0] for i in attn_mask_index], [i[1] for i in attn_mask_index]
+        attn_mask = torch.zeros_like(inpt_ids)
+        attn_mask[attn_mask_index_x, attn_mask_index_y] = 1
+        
+        if torch.cuda.is_available():
+            inpt_ids, token_type_ids, attn_mask = inpt_ids.cuda(), token_type_ids.cuda(), attn_mask.cuda()
+        return utterances_, inpt_ids, token_type_ids, attn_mask
         
     @torch.no_grad()
-    def talk(self, msgs):
+    def talk(self, msgs, topics):
         ''':topic: means the current topic node in the knowledge graph path.'''
         self.model.eval()
         # 1) inpt the topic information for the coarse filter in elasticsearch
         utterances, inpt_ids, token_type_ids, attn_mask = self.process_utterances(
-            [self.args['current_node']], msgs, max_len=self.args['max_len'],
+            topics, msgs, max_len=self.args['max_len'],
         )
         # 2) neural ranking with the topic information
         output = self.model(inpt_ids, token_type_ids, attn_mask)    # [B, 2]
         output = F.softmax(output, dim=-1)[:, 1]    # [B]
-        # 3) post ranking with current topic word
         output = torch.argsort(output, descending=True)
-        for i in output:
-            if self.args['current_node'] in utterances[i.item()]:
-                item = i
-                break
-        else:
-            item = 0
-        # item = torch.argmax(output).item()
+        item = torch.argmax(output).item()
         msg = utterances[item]
         return msg
     

@@ -220,10 +220,11 @@ class BERTBiCompEncoder(nn.Module):
     Set the different learning ratio
     '''
     
-    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.1):
+    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.1, decay_ratio=0.5):
         super(BERTBiCompEncoder, self).__init__()
         self.ctx_encoder = BertEmbedding()
         self.can_encoder = BertEmbedding()
+        self.decay_ratio = decay_ratio
         
         encoder_layer = nn.TransformerEncoderLayer(
             768, 
@@ -233,7 +234,7 @@ class BERTBiCompEncoder(nn.Module):
         )
         encoder_norm = nn.LayerNorm(768)
         self.trs_encoder = nn.TransformerEncoder(
-            encoder_layer, 
+            encoder_layer,
             num_encoder_layers, 
             encoder_norm,
         )
@@ -259,9 +260,9 @@ class BERTBiCompEncoder(nn.Module):
             ], 
             dim=1,
         )    # [S, 2*E]
-        cross_rep = self.trs_encoder(
+        cross_rep = self.decay_ratio * torch.tanh(self.trs_encoder(
             torch.relu(self.proj1(cross_rep).unsqueeze(1))
-        ).squeeze(1)
+        )).squeeze(1)
         cross_rep = self.layernorm(cross_rep + rid_rep)    # [B, E]
         # cid: [E]; rid: [B, E]
         dot_product = torch.matmul(cid_rep, cross_rep.t())    # [B]
@@ -333,10 +334,12 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'dmodel': model,
             'num_encoder_layers': 2,
             'dim_feedforward': 512,
-            'nhead': 8,
+            'nhead': 6,
             'dropout': 0.1,
             'max_len': 256,
             'poly_m': 16,
+            # prevent the comparison information influence the original information of each response
+            'decay_ratio': 0.4,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         if model == 'no-compare':

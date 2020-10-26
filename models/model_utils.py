@@ -288,6 +288,39 @@ class ESChat:
                 }
             }
         )
+        
+    def must_search(self, query, samples=10, topic=None):
+        '''
+        query is the string, which contains the utterances of the conversation context.
+        1. topic is a list contains the topic words
+        2. query utterance msg
+        
+        context: query is Q-Q matching
+        response: query is Q-A matching, which seems better
+        '''
+        query = query.replace('[SEP]', '')    # Need to replace the [SEP] berfore the searching
+        subitem_must = [{"match": {"utterance": {"query": i, 'boost': 1}}} for i in topic]
+        subitem_should = [{'match': {'utterance': {'query': query, 'boost': 1}}}]
+        dsl = {
+            'query': {
+                'bool': {
+                    "must": subitem_must,
+                    "should": subitem_should,
+                }
+            }
+        }
+        begin_samples, rest = samples, []
+        hits = self.es.search(index=self.index, body=dsl, size=begin_samples)['hits']['hits']
+        for h in hits:
+            item = {
+                'score': h['_score'], 
+                'utterance': h['_source']['utterance']
+            }
+            if item['utterance'] in query or 'http' in item['utterance']:
+                continue
+            else:
+                rest.append(item)
+        return rest
 
     def search(self, query, samples=10, topic=None):
         '''

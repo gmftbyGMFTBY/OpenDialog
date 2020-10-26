@@ -55,10 +55,22 @@ class ESChat:
         rest = self.es.msearch(body=request)
         return rest
 
+    def multi_search_edge(self, topics, samples=10):
+        # limit the querys length
+        search_arr = []
+        for topic1, topic2 in topics:
+            search_arr.append({'index': self.index})
+            search_arr.append({'query': {'bool': {'must': [{'match': {'utterance': {'query': topic1}}}, {'match': {'utterance': {'query': topic2}}}]}}, 'size': samples})
+        request = ''
+        for each in search_arr:
+            request += f'{json.dumps(each)} \n'
+        rest = self.es.msearch(body=request)
+        return rest
+
 def parser_args():
     parser = argparse.ArgumentParser(description='wordnet parameters')
     parser.add_argument('--weight_threshold', type=float, default=0.6)
-    parser.add_argument('--topn', type=int, default=10)
+    parser.add_argument('--topn', type=int, default=200)
     parser.add_argument('--mode', type=str, default='graph')
     return parser.parse_args()
 
@@ -138,7 +150,23 @@ def write_new_w2v(words, path):
             vec = w2v[word].tolist()
             string = f'{word} {" ".join(map(str, vec))}\n'
             f.write(string)
-            
+
+def retrieval_edge(word_pairs, samples=64):
+    rest = chatter.multi_search_edge(word_pairs, samples=samples)['responses']
+    flag = []
+    for (word1, word2), pair_rest in zip(word_pairs, rest):
+        counter = 0
+        pair_rest = pair_rest['hits']['hits']
+        for utterance in pair_rest:
+            utterance = utterance['_source']['utterance']
+            if word1 in utterance and word2 in utterance:
+                counter += 1
+        if counter >= 0.5 * samples:
+            flag.append(True)
+        else:
+            flag.append(False)
+    return flag
+ 
 def retrieval_filter(words, samples=64):
     rest = chatter.multi_search(words, samples=samples)
     rest = rest['responses']
@@ -204,9 +232,20 @@ if __name__ == "__main__":
         if not os.path.exists('wordnet.pkl'):
             graph = nx.Graph()
             graph.add_nodes_from(w2v.index2word)
+            # batch_size = 64 
+            # for idx in tqdm(range(0, len(w2v.index2word), batch_size)):
+            #     words = w2v.index2word[idx:idx+batch_size]
+            #     neighbors = []
+            #     for word in words:
+            #         neighbors.extend([(word, n, w) for n, w in w2v.most_similar(word, topn=args['topn'])])
+            #     flag = retrieval_edge([(word, n) for word, n, w in neighbors])
+            #     neighbors = [(word, n, w) for flag_, (word, n, w) in zip(flag, neighbors) if flag_]
+            #     graph.add_weighted_edges_from([(word, n, 1-w) for word, n, w in neighbors])
             for word in tqdm(w2v.index2word):
                 neighbors = w2v.most_similar(word, topn=args['topn'])
-                graph.add_weighted_edges_from([(word, n, 1 - w) for n, w in neighbors if 1 - w < args['weight_threshold']])
+                flag = retrieval_edge([(word, i) for i, _ in neighbors])
+                neighbors = [(n, w) for flag_, (n, w) in zip(flag, neighbors) if flag_]
+                graph.add_weighted_edges_from([(word, n, 1 - w) for n, w in neighbors])
             with open('wordnet.pkl', 'wb') as f:
                 pickle.dump(graph, f)
             print(f'[!] save the word net into wordnet.pkl')
