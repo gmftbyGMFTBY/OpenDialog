@@ -22,18 +22,7 @@
 | Models           | R1@10 | R2@10 | R5@10 | MRR    |
 |------------------|-------|-------|-------|------: |
 | bert bi-encoder  | 0.846 | 0.93  | 0.986 | 0.9064 |
-| bert bi-encoder ocn (random) | 0.843 | 0.93 | 0.985 | 0.9047 |
-| bert bi-encoder ocn (decay ratio=1.0) | 0.835 | 0.929 | 0.987 | 0.9003 |
-| bert bi-encoder ocn (decay ratio=0.9) | 0.83 | 0.93 | 0.986 | 0.8979 |
-| bert bi-encoder ocn (decay ratio=0.8) | 0.831 | 0.93 | 0.985 | 0.8983 |
-| bert bi-encoder ocn (decay ratio=0.7) | 0.839 | 0.933 | 0.988 | 0.9031 |
-| bert bi-encoder ocn (decay ratio=0.6) | 0.842 | 0.933 | 0.987 | 0.9047 |
-| bert bi-encoder ocn (decay ratio=0.5) | 0.844 | 0.935 | 0.987 | 0.906 |
-| bert bi-encoder ocn (decay ratio=0.4) | 0.85 | 0.94 | 0.988 | 0.9101 |
-| bert bi-encoder ocn (decay ratio=0.3) | 0.852 | 0.94 | 0.987 | 0.9115 |
-| bert bi-encoder ocn (decay ratio=0.2) | 0.853 | 0.94 | 0.988 | 0.912 |
-| bert bi-encoder ocn (decay ratio=0.1) | 0.857 | 0.944 | 0.99 | 0.915 |
-| bert bi-encoder ocn (decay ratio=0.0) | 0.859 | 0.944 | 0.99 | 0.9161 |
+| bert bi-encoder ocn | 0.849 | 0.934 | 0.985 | 0.9086 |
 | bert polyencoder |       |       |       |       |
 | bert cross-attention |      |       |       |       |
 

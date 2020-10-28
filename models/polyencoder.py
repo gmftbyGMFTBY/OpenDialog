@@ -268,9 +268,9 @@ class BERTBiCompEncoder(nn.Module):
             self.gate(
                 torch.cat(
                     [
-                        cross_rep,    # [S, E]
                         rid_rep,    # [S, E]
                         cid_rep.unsqueeze(0).expand(batch_size, -1),    # [S, E]
+                        cross_rep,    # [S, E]
                     ],
                     dim=-1,
                 )
