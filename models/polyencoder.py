@@ -50,15 +50,14 @@ class PolyEncoder(nn.Module):
         # cid_rep/rid_rep: [M, E], [B, E]
         
         # POLY ENCODER ATTENTION
-        # weight    [B, M]
+        # [M, E] X [E, S] -> [M, S] -> [S, M]
         weights = F.softmax(
-            torch.matmul(rid_rep, cid_rep.t()),
+            torch.matmul(cid_rep, rid_rep.t()).transpose(0, 1),
             dim=-1,
         )
-        # context embedding
-        cid_rep = torch.matmul(weights, cid_rep)    # [B, M] * [M, E] -> [B, E]
-        
-        dot_product = torch.diagonal(torch.matmul(cid_rep, rid_rep.t()))  # [B, E] * [B, E] -> [B, E] -> [B]
+        # [S, M] X [M, E] -> [S, E]
+        cid_rep = torch.matmul(weights, cid_rep)
+        dot_product = (cid_rep * rid_rep).sum(-1)    # [S]
         return dot_product
         
     def forward(self, cid, rid, cid_mask, rid_mask):
@@ -68,21 +67,14 @@ class PolyEncoder(nn.Module):
         # cid_rep/rid_rep: [B, M, E]; [B, E]
         
         # POLY ENCODER ATTENTION
-        # weight    [B, M]
+        # [B, M, E] X [E, S] -> [B, M, S] -> [B, S, M]
         weights = F.softmax(
-            torch.bmm(
-                rid_rep.unsqueeze(1),    # [B, 1, E]
-                cid_rep.permute(0, 2, 1),    # [B, E, M]
-            ).squeeze(1),    # [B, 1, M] -> [B, M]
+            torch.matmul(cid_rep, rid_rep.t()).permute(0, 2, 1),    # [B, M, S] -> [B, S, M]
             dim=-1,
         )
-        # context embedding
-        cid_rep = torch.bmm(
-            weights.unsqueeze(1),    # [B, 1, M],
-            cid_rep,    # [B, M, E]
-        ).squeeze(1)    # [B, 1, E] -> [B, E] 
-        
-        dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B, B]
+        cid_rep = torch.bmm(weights, cid_rep)    # [B, S, M] X [B, M, E] -> [B, S, E]
+        # [B, S, E] x [B, S, E] -> [B, S]
+        dot_product = (cid_rep * rid_rep.unsqueeze(0).expand(batch_size, -1, -1)).sum(-1)
         # use half for supporting the apex
         mask = to_cuda(torch.eye(batch_size)).half()    # [B, B]
         # calculate accuracy
@@ -220,11 +212,10 @@ class BERTBiCompEncoder(nn.Module):
     Set the different learning ratio
     '''
     
-    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.1, decay_ratio=0.5):
+    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.1):
         super(BERTBiCompEncoder, self).__init__()
         self.ctx_encoder = BertEmbedding()
         self.can_encoder = BertEmbedding()
-        self.decay_ratio = decay_ratio
         
         encoder_layer = nn.TransformerEncoderLayer(
             768, 
@@ -239,8 +230,10 @@ class BERTBiCompEncoder(nn.Module):
             encoder_norm,
         )
         
-        self.layernorm = nn.LayerNorm(768)
         self.proj1 = nn.Linear(768*2, 768)
+        self.gate = nn.Linear(768*3, 768)
+        self.dropout = nn.Dropout(p=dropout)
+        self.layernorm = nn.LayerNorm(768)
         
     def _encode(self, cid, rid, cid_mask, rid_mask):
         cid_rep = self.ctx_encoder(cid, cid_mask)
@@ -249,24 +242,45 @@ class BERTBiCompEncoder(nn.Module):
     
     @torch.no_grad()
     def predict(self, cid, rid, rid_mask):
-        # cid_rep: [1, E]; rid_rep: [B, E]
+        # cid_rep: [1, E]; rid_rep: [S, E]
         batch_size = rid.shape[0]
         cid_rep, rid_rep = self._encode(cid.unsqueeze(0), rid, None, rid_mask)
         cid_rep = cid_rep.squeeze(0)    # [E]
         cross_rep = torch.cat(
             [
-                cid_rep.unsqueeze(0).expand(batch_size, -1).detach(), 
-                rid_rep
+                cid_rep.unsqueeze(0).expand(batch_size, -1), 
+                rid_rep,
             ], 
             dim=1,
         )    # [S, 2*E]
-        cross_rep = self.decay_ratio * torch.tanh(self.trs_encoder(
-            torch.relu(self.proj1(cross_rep).unsqueeze(1))
-        )).squeeze(1)
-        cross_rep = self.layernorm(cross_rep + rid_rep)    # [B, E]
-        # cid: [E]; rid: [B, E]
-        dot_product = torch.matmul(cid_rep, cross_rep.t())    # [B]
-        return dot_product   # [B]
+        
+        cross_rep = self.dropout(
+            torch.tanh(
+                self.trs_encoder(
+                    torch.tanh(
+                        self.proj1(cross_rep).unsqueeze(1)
+                    )
+                )
+            ).squeeze(1)
+        )    # [S, E]
+        
+        gate = torch.sigmoid(
+            self.gate(
+                torch.cat(
+                    [
+                        cross_rep,    # [S, E]
+                        rid_rep,    # [S, E]
+                        cid_rep.unsqueeze(0).expand(batch_size, -1),    # [S, E]
+                    ],
+                    dim=-1,
+                )
+            )
+        )    # [S, E]
+        # cross_rep: [S, E]
+        cross_rep = self.layernorm(gate * rid_rep + (1 - gate) * cross_rep)
+        # cid: [E]; cross_rep: [S, E]
+        dot_product = torch.matmul(cid_rep, cross_rep.t())    # [S]
+        return dot_product
         
     def forward(self, cid, rid, cid_mask, rid_mask):
         batch_size = cid.shape[0]
@@ -278,19 +292,31 @@ class BERTBiCompEncoder(nn.Module):
         for cid_rep_ in cid_rep:
             cid_rep_ = cid_rep_.unsqueeze(0).expand(batch_size, -1)    # [S, E]
             cross_rep.append(
-                torch.cat(
-                    [
-                        cid_rep_.detach(), 
-                        rid_rep
-                    ], 
-                    dim=1
-                )
+                torch.cat([cid_rep_, rid_rep], dim=-1)
             )    # [S, E*2]
         cross_rep = torch.stack(cross_rep).permute(1, 0, 2)    # [B, S, 2*E] -> [S, B, E*2]
-        cross_rep = self.trs_encoder(
-            torch.relu(self.proj1(cross_rep))
-        ).permute(1, 0, 2)
-        cross_rep = self.layernorm(cross_rep + rid_rep.unsqueeze(0).expand(batch_size, -1, -1))    # [B, S, E]
+        cross_rep = self.dropout(
+            torch.tanh(
+                self.trs_encoder(
+                    torch.tanh(self.proj1(cross_rep))
+                )
+            ).permute(1, 0, 2)
+        )    # [B, S, E]
+        
+        gate = torch.sigmoid(
+            self.gate(
+                torch.cat(
+                    [
+                        rid_rep.unsqueeze(0).expand(batch_size, -1, -1), 
+                        cid_rep.unsqueeze(1).expand(-1, batch_size, -1),
+                        cross_rep,
+                    ], 
+                    dim=-1
+                )
+            )
+        )    # [B, S, E]
+        cross_rep = self.layernorm(gate * rid_rep.unsqueeze(0).expand(batch_size, -1, -1) + (1 - gate) * cross_rep)    # [B, S, E]
+        
         # reconstruct rid_rep
         cid_rep = cid_rep.unsqueeze(1)    # [B, 1, E]
         dot_product = torch.bmm(cid_rep, cross_rep.permute(0, 2, 1)).squeeze(1)    # [B, S]
@@ -338,8 +364,6 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'dropout': 0.1,
             'max_len': 256,
             'poly_m': 16,
-            # prevent the comparison information influence the original information of each response
-            'decay_ratio': 0.4,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         if model == 'no-compare':
@@ -380,6 +404,10 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                             'params': self.model.proj1.parameters(), 
                             'lr': self.args['lr_'],
                         },
+                        {
+                            'params': self.model.gate.parameters(), 
+                            'lr': self.args['lr_'],
+                        }
                     ], 
                     lr=self.args['lr'],
                 )

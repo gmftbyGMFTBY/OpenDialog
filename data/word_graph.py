@@ -230,7 +230,7 @@ if __name__ == "__main__":
         print(f'[!] load the new word2vec from chinese_w2v_base.txt')
         # 5)
         if not os.path.exists('wordnet.pkl'):
-            graph = nx.Graph()
+            graph = nx.DiGraph()
             graph.add_nodes_from(w2v.index2word)
             # batch_size = 64 
             # for idx in tqdm(range(0, len(w2v.index2word), batch_size)):
@@ -243,8 +243,8 @@ if __name__ == "__main__":
             #     graph.add_weighted_edges_from([(word, n, 1-w) for word, n, w in neighbors])
             for word in tqdm(w2v.index2word):
                 neighbors = w2v.most_similar(word, topn=args['topn'])
-                flag = retrieval_edge([(word, i) for i, _ in neighbors])
-                neighbors = [(n, w) for flag_, (n, w) in zip(flag, neighbors) if flag_]
+                # flag = retrieval_edge([(word, i) for i, _ in neighbors])
+                # neighbors = [(n, w) for flag_, (n, w) in zip(flag, neighbors) if flag_]
                 graph.add_weighted_edges_from([(word, n, 1 - w) for n, w in neighbors])
             with open('wordnet.pkl', 'wb') as f:
                 pickle.dump(graph, f)
