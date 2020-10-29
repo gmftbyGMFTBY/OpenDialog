@@ -274,7 +274,7 @@ def load_rubert_irbi_dataset(args):
 
 # ================================================================================ #
 def load_bert_irbi_dataset(args):
-    path = f'data/{args["dataset"]}/{args["mode"]}_300.txt'
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     # data = BERTIRBIDataset(path, mode=args['mode'], max_len=args['src_len_size'])
     data = RetrievalDataset(path, mode=args['mode'], max_len=args['src_len_size'])
     if args['mode'] in ['train', 'dev']:
@@ -297,7 +297,7 @@ def load_bert_irbi_dataset(args):
     return iter_
 
 def load_bert_irbicomp_dataset(args):
-    path = f'data/{args["dataset"]}/{args["mode"]}_300.txt'
+    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
     data = RetrievalDataset(path, mode=args['mode'], max_len=args['src_len_size'])
     if args['mode'] in ['train', 'dev']:
         train_sampler = torch.utils.data.distributed.DistributedSampler(data)
