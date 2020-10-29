@@ -832,10 +832,6 @@ class RetrievalDataset(Dataset):
     def __init__(self, path, mode='train', max_len=300):
         self.mode = mode
         self.max_len = max_len
-        if mode == 'train':
-            data = read_retrieval_data_train(path)
-        else:
-            data = read_retrieval_data_test(path)
         self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
         self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
         self.pp_path = f'{os.path.splitext(path)[0]}_irbi.pt'
@@ -843,6 +839,12 @@ class RetrievalDataset(Dataset):
             self.data = torch.load(self.pp_path)
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
+        if mode == 'train':
+            data = read_retrieval_data_train(path)
+        else:
+            name = os.path.split(path)[-1][5:-4]
+            samples = 10 if name == 'test' else int(name)
+            data = read_retrieval_data_test(path, samples=samples)
         self.data = []
         if mode in ['train', 'dev']:
             contexts = [i[0] for i in data]

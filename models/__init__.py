@@ -17,7 +17,6 @@ from .test import *
 from .model_utils import *
 from .dialogpt import *
 from .pone import *
-from .DualLSTM import *
 from .bert_mc import *
 from .lccc_gpt2 import *
 from .uni import *

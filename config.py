@@ -2,7 +2,6 @@ from dataset_init import *
 from models import *
 
 dataset_loader = {
-    'DualLSTM': load_ir_dataset,
     'seq2seq': load_seq2seq_dataset,
     'kwgpt2': load_kwgpt2_dataset,
     'gpt2': load_gpt2_dataset,
@@ -28,7 +27,6 @@ dataset_loader = {
 }
 
 agent_map = {
-    'DualLSTM': DualLSTMAgent, 
     'seq2seq': Seq2SeqAgent,
     'gpt2': GPT2Agent,
     'gpt2v2': GPT2V2Agent,
@@ -65,7 +63,6 @@ agent_map = {
 
 # run_mode is the keyname of the agent, mode is the key in the args
 model_parameters = {
-    'DualLSTM': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang'}],
     'bertretrieval': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank'}],
     'bertretrievalkggreedy': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank', 'wordnet': 'wordnet', 'talk_samples': 'talk_samples'}],
     'bertretrievalclustergreedy': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank', 'wordnet': 'wordnet', 'talk_samples': 'talk_samples'}],

@@ -272,8 +272,9 @@ def load_rubert_irbi_dataset(args):
     args['bimodel'] = 'ru-no-compare'
     return iter_
 
+# ================================================================================ #
 def load_bert_irbi_dataset(args):
-    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    path = f'data/{args["dataset"]}/{args["mode"]}_300.txt'
     # data = BERTIRBIDataset(path, mode=args['mode'], max_len=args['src_len_size'])
     data = RetrievalDataset(path, mode=args['mode'], max_len=args['src_len_size'])
     if args['mode'] in ['train', 'dev']:
@@ -296,7 +297,7 @@ def load_bert_irbi_dataset(args):
     return iter_
 
 def load_bert_irbicomp_dataset(args):
-    path = f'data/{args["dataset"]}/{args["mode"]}.txt'
+    path = f'data/{args["dataset"]}/{args["mode"]}_300.txt'
     data = RetrievalDataset(path, mode=args['mode'], max_len=args['src_len_size'])
     if args['mode'] in ['train', 'dev']:
         train_sampler = torch.utils.data.distributed.DistributedSampler(data)
@@ -313,6 +314,7 @@ def load_bert_irbicomp_dataset(args):
     args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
     args['bimodel'] = 'compare'
     return iter_
+# ================================================================================ #
 
 def load_bert_ir_dataset(args):
     path = f'data/{args["dataset"]}/{args["mode"]}.txt'

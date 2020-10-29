@@ -5,6 +5,13 @@ mode=$1
 if [ $mode = 'init_es' ]; then
     # init the ElasticSearch and restore the retrieval database
     python process_data.py --mode insert
+elif [ $mode = 'expand_negative' ]; then
+    expand_samples=(40 90 140 190 240 290)
+    for num in ${expand_samples[@]}
+    do
+        python expand_negative_samples.py --num $num --dataset douban300w
+        python expand_negative_samples.py --num $num --dataset ecommerce
+    done
 elif [ $mode = 'init_topic_guided' ]; then
     python word_graph.py --mode graph
     # generate the words by frequecy from the corpus

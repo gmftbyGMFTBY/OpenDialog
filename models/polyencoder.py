@@ -351,7 +351,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'talk_samples': 256,
             'vocab_file': 'bert-base-chinese',
             'pad': 0,
-            'samples': 10,
+            'samples': 300,
             'model': 'bert-base-chinese',
             'amp_level': 'O2',
             'local_rank': local_rank,
