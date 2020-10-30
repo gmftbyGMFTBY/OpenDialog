@@ -123,6 +123,7 @@ rest/
 bak/
 ckpt/
 *pretrained
+benckmarks/
 
 !data/vocab/*
 !data/config/*
