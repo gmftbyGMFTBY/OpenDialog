@@ -1,10 +1,8 @@
 from .header import *
 
 '''
-PolyEncoder: https://arxiv.org/pdf/1905.01969v2.pdf
-1. Bi-encoder
-2. Cross-encoder (refer to bertretrieval)
-3. Poly-Encoder
+1. Bert Bi-encoder
+2. PolyEncoder
 '''
 
 class BertEmbedding(nn.Module):
@@ -95,7 +93,7 @@ class PolyCompEncoder(nn.Module):
         )    # [S, E]
         
         gate = torch.sigmoid(
-            self.gaet(
+            self.gate(
                 torch.cat(
                     [
                         rid_rep,    # [S, E]
@@ -468,12 +466,15 @@ class BERTBiCompEncoder(nn.Module):
     
 class BERTBiEncoderAgent(RetrievalBaseAgent):
     
-    '''model parameter can be:
-    1. compare: bi-encoder with comparsion module
-    2. no-compare: pure bi-encoder
-    3. polyencoder: polyencoder'''
+    '''
+    model parameter can be:
+    1. bertirbi: bi-encoder with comparsion module
+    2. bertirbicomp: pure bi-encoder
+    3. polyencoder: polyencoder
+    4. polyencodercomp: polyencoder with the comparsion module
+    '''
     
-    def __init__(self, multi_gpu, total_step, run_mode='train', local_rank=0, kb=True, model='no-compare'):
+    def __init__(self, multi_gpu, total_step, run_mode='train', local_rank=0, kb=True, model='bertirbi'):
         super(BERTBiEncoderAgent, self).__init__(kb=kb)
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(',')))) 
@@ -487,22 +488,26 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'talk_samples': 256,
             'vocab_file': 'bert-base-chinese',
             'pad': 0,
-            'samples': 300,
+            'samples': 10,
             'model': 'bert-base-chinese',
             'amp_level': 'O2',
             'local_rank': local_rank,
             'warmup_steps': 8000,
             'total_step': total_step,
-            'dmodel': model,
+            'retrieval_model': model,
             'num_encoder_layers': 2,
             'dim_feedforward': 512,
             'nhead': 6,
             'dropout': 0.1,
             'max_len': 256,
             'poly_m': 16,
+            # RNN parameters
+            'embed_size': 512,
+            'hidden_size': 512,
+            'num_encoder_layer': 4,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
-        if model == 'no-compare':
+        if model == 'bertirbi':
             self.model = BERTBiEncoder()
         elif model == 'polyencoder':
             self.model = PolyEncoder( 
@@ -516,17 +521,26 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                 dropout=self.args['dropout'],
                 m=self.args['poly_m'],
             )
-        else:
+        elif model == 'bertirbicomp':
             self.model = BERTBiCompEncoder(
                 self.args['nhead'], 
                 self.args['dim_feedforward'], 
                 self.args['num_encoder_layers'], 
                 dropout=self.args['dropout'],
             )
+        elif model == 'DualLSTM':
+            self.model = DualLSTM(
+                embed_size=self.args['embed_size'],
+                hidden_size=self.args['hidden_size'],
+                num_encoder_layer=self.args['num_encoder_layer'],
+                dropout=0.5,
+            )
+        else:
+            raise Exception(f'[!] cannot find the model {model}')
         if torch.cuda.is_available():
             self.model.cuda()
         if run_mode == 'train':
-            if model in ['polyencoder', 'no-compare']:
+            if model in ['polyencoder', 'bertirbi', 'DualLSTM']:
                 self.optimizer = transformers.AdamW(
                     self.model.parameters(), 
                     lr=self.args['lr'],

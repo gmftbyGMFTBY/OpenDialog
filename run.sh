@@ -69,7 +69,7 @@ elif [ $mode = 'train' ]; then
         --multi_gpu $cuda \
         --lang $lang
 elif [ $mode = 'test' ]; then
-    one_batch_model=(kwgpt2 pfgpt2 gpt2gan lccc multigpt2 when2talk bertirbi bertirbicomp polyencoder)
+    one_batch_model=(kwgpt2 pfgpt2 gpt2gan lccc multigpt2 when2talk bertirbi bertirbicomp polyencoder polyencodercomp)
     if [[ ${one_batch_model[@]} =~ $model ]]; then
         batch_size=1
     else

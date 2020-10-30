@@ -12,7 +12,7 @@ from .gpt2gan_v2 import *
 from .bert_retrieval import *
 from .bert_retrieval_multi import *
 from .bert_nli import *
-from .polyencoder import *
+from .biencoder import *
 from .test import *
 from .model_utils import *
 from .dialogpt import *

@@ -290,10 +290,7 @@ def load_bert_irbi_dataset(args):
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
-    if args['model'] == 'polyencoder':
-        args['bimodel'] = args['model']
-    else:
-        args['bimodel'] = 'no-compare'
+    args['bimodel'] = args['model']
     return iter_
 
 def load_bert_irbicomp_dataset(args):
@@ -312,7 +309,7 @@ def load_bert_irbicomp_dataset(args):
     if not os.path.exists(data.pp_path):
         data.save_pickle()
     args['total_steps'] = len(data) * args['epoch'] / args['batch_size']
-    args['bimodel'] = 'compare'
+    args['bimodel'] = args['model']
     return iter_
 # ================================================================================ #
 
