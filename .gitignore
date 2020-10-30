@@ -122,8 +122,8 @@ rest/
 # data/
 bak/
 ckpt/
+benchmarks/*.md
 *pretrained
-benckmarks/
 
 !data/vocab/*
 !data/config/*
