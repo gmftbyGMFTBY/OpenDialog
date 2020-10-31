@@ -1,6 +1,6 @@
 # OpenDialog
 
-我们现在拥有了测试接口了，搜索微信公众号 `OpenDialog` 可以使用
+~~我们现在拥有了测试接口了，搜索微信公众号 `OpenDialog` 可以使用~~
 
 OpenDialog建立在基于PyTorch的[transformers](https://github.com/huggingface/transformers)之上。
 提供一系列transformer-based的**中文**开放域对话模型（闲聊对话），网罗已有的数据资源并持续不断的补充对应的中文对话系统的数据集，意图构建一个开源的中文闲聊对话平台。

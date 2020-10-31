@@ -843,7 +843,7 @@ class RetrievalDataset(Dataset):
             data = read_retrieval_data_train(path)
         else:
             name = os.path.split(path)[-1][5:-4]
-            samples = 10 if name == 'test' else int(name)
+            samples = 10 if name == 'test.txt' else int(name[5:-4])
             data = read_retrieval_data_test(path, samples=samples)
         self.data = []
         if mode in ['train', 'dev']:

@@ -10,7 +10,7 @@ elif [ $mode = 'expand_negative' ]; then
     for num in ${expand_samples[@]}
     do
         python expand_negative_samples.py --num $num --dataset douban300w
-        python expand_negative_samples.py --num $num --dataset ecommerce
+        # python expand_negative_samples.py --num $num --dataset ecommerce
     done
 elif [ $mode = 'init_topic_guided' ]; then
     python word_graph.py --mode graph

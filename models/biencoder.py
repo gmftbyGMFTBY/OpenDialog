@@ -223,12 +223,10 @@ class RUBERTBiEncoder(nn.Module):
     
     '''Re-used Bert bi-encoder model'''
     
-    def __init__(self, max_turn_length=10):
+    def __init__(self, max_turn_length=10, m=16):
         super(RUBERTBiEncoder, self).__init__()
-        self.ctx_encoder = BertEmbedding()
+        self.ctx_encoder = BertEmbedding(m=m)
         self.can_encoder = BertEmbedding()
-        self.turn_weight = F.softmax(torch.log2(torch.arange(1, max_turn_length+1, dtype=torch.float)), dim=-1)
-        self.turn_weight = to_cuda(self.turn_weight).half()    # apex
         self.max_chunk = 64
         
     def _encode(self, ids, ids_mask, ctx=True):
@@ -239,17 +237,19 @@ class RUBERTBiEncoder(nn.Module):
             for idx in range(0, len(ids), self.max_chunk):
                 subids = ids[idx:idx+self.max_chunk]
                 submask = ids_mask[idx:idx+self.max_chunk]
-                sub_id_rep = self.ctx_encoder(subids, submask)
+                sub_id_rep = self.ctx_encoder(subids, submask, strategy='first-m')
                 id_rep.append(sub_id_rep)
-            id_rep = torch.cat(id_rep)
+            id_rep = torch.cat(id_rep)    # [B*T, M, E]
         else:
-            id_rep = self.can_encoder(ids, ids_mask)
+            id_rep = self.can_encoder(ids, ids_mask)    # [B*T, E]
         return id_rep
     
     def squeeze(self, cid):
-        '''squeeze the context embeddings; cid: [B, T, E]'''
+        '''squeeze the context embeddings; cid: [B*T, M, E]'''
         rest = []
         for sample in cid:
+            # sample: [T, M, E]
+            sample = sample.reshape(-1, sample.shape[-1])    # [T*M, E]
             weight = self.turn_weight[:len(sample)].unsqueeze(1).expand(-1, 768)
             # [T, E] * [T, E]
             rest.append(torch.sum(weight * sample, dim=0))    # [E]
@@ -281,8 +281,8 @@ class RUBERTBiEncoder(nn.Module):
     def forward(self, cid, turn_length, rid, cid_mask, rid_mask):
         '''cid: [B*T, S]; rid: [B, S]; cid_mask: [B*T, S]; rid_mask: [B, S]'''
         batch_size = rid.shape[0]
-        cid_rep = self._encode(cid, cid_mask, ctx=True)   # [B*T, E]
-        cid_rep = self.squeeze(torch.split(cid_rep, turn_length))    # [B, E]
+        cid_rep = self._encode(cid, cid_mask, ctx=True)   # [B*T, M, E]
+        cid_rep = self.squeeze(torch.split(cid_rep, turn_length))    # [B, M, E]
         rid_rep = self._encode(rid, rid_mask, ctx=False)   # [B, E]
         
         # cid_rep/rid_rep: [B, 768]
@@ -501,10 +501,6 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'dropout': 0.1,
             'max_len': 256,
             'poly_m': 16,
-            # RNN parameters
-            'embed_size': 512,
-            'hidden_size': 512,
-            'num_encoder_layer': 4,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         if model == 'bertirbi':
@@ -527,13 +523,6 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                 self.args['dim_feedforward'], 
                 self.args['num_encoder_layers'], 
                 dropout=self.args['dropout'],
-            )
-        elif model == 'DualLSTM':
-            self.model = DualLSTM(
-                embed_size=self.args['embed_size'],
-                hidden_size=self.args['hidden_size'],
-                num_encoder_layer=self.args['num_encoder_layer'],
-                dropout=0.5,
             )
         else:
             raise Exception(f'[!] cannot find the model {model}')
@@ -673,7 +662,8 @@ class RUBERTBiEncoderAgent(RetrievalBaseAgent):
             'warmup_steps': 8000,
             'total_step': total_step,
             'max_len': 256,
-            'max_turn_size': 10
+            'max_turn_size': 10,
+            'poly_m': 16,
         }
         self.history_text, self.history_embd = [], []
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])

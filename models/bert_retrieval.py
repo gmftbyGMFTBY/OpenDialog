@@ -1,5 +1,5 @@
 from .header import *
-from .polyencoder import BERTBiEncoder
+from .biencoder import BERTBiEncoder
 
 '''Cross-Attention BertRetrieval'''
 

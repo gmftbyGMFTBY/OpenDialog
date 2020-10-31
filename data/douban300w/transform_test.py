@@ -1,4 +1,5 @@
 from tqdm import tqdm
+import random
 import ipdb
 
 '''
@@ -10,25 +11,41 @@ def transform():
     fw = open('test.txt', 'w')
     with open('test_.txt') as f:
         dataset = [i.strip() for i in f.readlines()]
+        responses = [i.split('\t')[-1] for i in dataset]
     s = 0
     for idx in tqdm(range(0, len(dataset), 10)):
         item = dataset[idx:idx+10]
         sample, counter = [], 0
         for i in item:
             i = i.split('\t')
+            response = i[-1]
             label, utterances = int(i[0]), '\t'.join(i[1:])
             counter += label
-            sample.append((label, f'{label}\t{utterances}\n'))
-        if counter != 1:
+            sample.append((label, f'{label}\t{utterances}\n', response))
+        if counter == 0:
             continue
-        else:
+        elif counter == 1:
             # >=1 positive is legal
             # sort the sample; make sure the positive samples is in front of all the negaitve samples
             sample = sorted(sample, key=lambda x:x[0], reverse=True)
-            for _, string in sample:
+            for _, string, _ in sample:
                 fw.write(f'{string}')
             s += 1
-    print(f'[!] find {s} legal test session samples from {int(len(dataset)/10)} sessions')  
+        elif counter > 1:
+            # select one positive and randomly select some as the negative samples to replace
+            num = counter - 1
+            sample = sorted(sample, key=lambda x:x[0], reverse=True)
+            # select one positive
+            candidates = list(set(responses) - set([i[-1] for i in sample]))
+            sample_positive = sample[0]
+            msg = '\t'.join(sample_positive[1].split('\t')[1:-1])
+            sample = [sample_positive] + [i for i in sample[1:] if i[0] == 0]
+            sample.extend([(0, f'0\t{msg}\t{i}\n', i) for i in random.sample(candidates, num)])
+            for _, string, _ in sample:
+                fw.write(f'{string}')
+            s += 1
+
+    print(f'[!] find {s} legal test session samples from {int(len(dataset)/10)} sessions')
     fw.close()
 
 if __name__ == "__main__":

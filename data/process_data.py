@@ -108,7 +108,7 @@ if __name__ == "__main__":
     args = parse_args()
     args = vars(args)
     if args['mode'] == 'insert':
-        lac = LAC(mode='seg')
+        # lac = LAC(mode='seg')
         # collect_samples_qq('retrieval_database')
         collect_samples_qq('retrieval_database')
         # collect_samples_qq_zh50w('zh50w_database')

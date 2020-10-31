@@ -242,9 +242,13 @@ class ESUtils:
                         'type': 'text',
                         'analyzer': 'ik_max_word',
                         'search_analyzer': 'ik_smart'
+                    },
+                    'keyword': {
+                        'type': 'keyword',
                     }
                 }
             }
+            print(mapping)
             # ===== whitespace is used when the chinese text is already tokenized ===== #
             # mapping = {
             #     'properties': {
@@ -269,6 +273,7 @@ class ESUtils:
                 '_index': self.index,
                 '_id': i + count,
                 'utterance': utterance,
+                'keyword': utterance,
             })
         helpers.bulk(self.es, actions) 
         print(f'[!] retrieval database size: {self.es.count(index=self.index)["count"]}')
@@ -307,6 +312,10 @@ class ESChat:
                     "must": subitem_must,
                     "should": subitem_should,
                 }
+            },
+            # NOTE
+            'collapse': {
+                'field': 'keyword'
             }
         }
         begin_samples, rest = samples, []
@@ -338,6 +347,10 @@ class ESChat:
                     'match': {
                         'utterance': query    # Q-A matching is better
                     }
+                },
+                # NOTE
+                'collapse': {
+                    'field': 'keyword'
                 }
             }
         else:
@@ -358,6 +371,10 @@ class ESChat:
                     'bool': {
                         "should": subitem
                     }
+                },
+                # NOTE
+                'collapse': {
+                    'field': 'keyword'
                 }
             }
         begin_samples, rest = samples, []
