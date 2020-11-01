@@ -60,6 +60,7 @@ def read_text(path):
 def write_file(dataset, path):
     with open(path, 'w') as f:
         responses = [i[-1] for i in dataset]
+        counter = 0
         for idx in tqdm(range(0, len(dataset), args['bsz'])):
             item = dataset[idx:idx+args['bsz']]
             msgs = [' [SEP] '.join(i[:-1]) for i in item]
@@ -75,21 +76,19 @@ def write_file(dataset, path):
             else:   
                 rest = chatter.multi_search(msgs, samples=args['samples'])['responses']
                 for m, r, r_ in zip(msgs, res, rest):
-                    ipdb.set_trace()
                     r_ = r_['hits']['hits']
-                    neg = list(set([i['_source']['utterance'] for i in r_]) - set([r]))[:args['num_neg']]
-                    try:
-                        assert len(neg) == args['num_neg'], f'[!] cannot retrieval enough samples'
-                    except:
-                        ipdb.set_trace()
+                    neg = list(set([i['_source']['utterance'] for i in r_]) - set([r]))[-args['num_neg']:]
+                    if len(neg) < args['num_neg']:
+                        continue
                     m = m.replace(' [SEP] ', '\t')
                     positive = f'1\t{m}\t{r}'
                     negative = [f'0\t{m}\t{i}' for i in neg]
                     write_data.append([positive] + negative)
-            
+            counter += len(write_data)
             for dialog in write_data:
                 for string in dialog:
                     f.write(f'{string}\n')
+        print(f'[!] write {counter} samples')
 
 if __name__ == "__main__":
     args = parser_args()
