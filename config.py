@@ -1,6 +1,25 @@
 from dataset_init import *
 from models import *
 
+api_args = {
+    'token': 'xxxxx',
+    'mongodb': {
+        'database': 'dialog',
+        'table': 'test',
+    },
+    'special_cmd': {
+        'clear': '#clear',
+        'kg': '#kg',
+    },
+    'host': '0.0.0.0',
+    'port': 8080,
+    'model': 'bertretrieval',
+    'chat_mode': 0,
+    'multi_turn_size': 5,
+    'verbose': True,
+    'gpu_id': 0,
+}
+
 dataset_loader = {
     'seq2seq': load_seq2seq_dataset,
     'kwgpt2': load_kwgpt2_dataset,

@@ -1,6 +1,7 @@
 from header import *
 from utils import *
 from api_utils import *
+from config import *
 
 '''API for wechat'''
 
@@ -56,7 +57,7 @@ def wechat_api():
         my_nonce = request.args.get('nonce')
         my_echostr = request.args.get('echostr')
 
-        token = 'gmftbyGMFTBY'    # your token
+        token = api_args['token']    # your token
 
         data = [token, my_timestamp, my_nonce]
         data.sort()
@@ -69,22 +70,22 @@ def wechat_api():
         else:
             return make_response('')
     else:
-        table = init_mongodb('dialog', 'test')
+        table = init_mongodb(api_arg['mongodb']['database'], api_args['mongodb']['table'])
         toUser, fromUser, msgType, content = parse_msg(request)
         
         # speical order
-        if '#clear' == content:
+        if api_args['special_cmd']['clear'] == content:
             table.delete_many({})
             logger.info(f'[!] delete all the utterances in the database')
             return reply_text(fromUser, toUser, '#clear database over')
-        elif content.startswith('#kg'):
+        elif content.startswith(api_args['special_cmd']['kg']):
             # kg-driven chat
             try:
                 kg_path = eval(content[3:])
             except:
                 return reply_text(fromUser, toUser, f'{content} error')
             session['kg_path'], session['node'] = kg_path, 0
-            args['session'], args['chat_mode'] = session, 2
+            api_args['session'], api_args['chat_mode'] = session, 2
             return reply_text(fromUser, toUser, f"#set the knowledge path {kg_path}")
         
         table.insert_one({
@@ -93,24 +94,23 @@ def wechat_api():
             'utterance': content, 
             'id': db_table_counter(table),
         })
-        args['table'], args['fromUser'], args['toUser'] = table, fromUser, toUser
+        api_args['table'], api_args['fromUser'], api_args['toUser'] = table, fromUser, toUser
         
         # chat and obtain the response
-        reply = chat(agent, content, args=args, logger=logger)
+        reply = chat(agent, content, args=api_args, logger=logger)
         table.insert_one({
             'toUser': fromUser,
             'fromUser': toUser,
             'utterance': reply,
             'id': db_table_counter(table),
         })
-        if args['verbose']:
+        if api_args['verbose']:
             string = '\n========== LOG ==========\n'
-            string += f'[Context] {args["content"]}\n[Response] {reply}'
+            string += f'[Context] {api_args["content"]}\n[Response] {reply}'
             string += '\n========== LOG ==========\n'
             logger.info(string)
         return reply_text(fromUser, toUser, reply)
 
 if __name__ == "__main__":
-    args = vars(parser_args_api())
-    agent = flask_load_agent(args['model'], args['gpu_id'], logger)
-    app.run(host="0.0.0.0", port=8080)
+    agent = flask_load_agent(api_args['model'], api_args['gpu_id'], logger)
+    app.run(host=api_args['host'], port=api_args['port'])

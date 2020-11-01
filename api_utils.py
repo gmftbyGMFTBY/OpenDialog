@@ -1,21 +1,6 @@
 from header import *
 from models import *
 
-def parser_args_api():
-    '''chat mode:
-    1. mode 0: single-turn chat
-    2. mode 1: multi-turn chat
-    3. mode 2: knowledge driven multi-turn chat
-    '''
-    parser = argparse.ArgumentParser(description='flask chatting mode')
-    parser.add_argument('--model', type=str, default='bertretrieval')
-    parser.add_argument('--gpu_id', type=str, default='0')
-    parser.add_argument('--chat_mode', type=int, default=0)
-    parser.add_argument('--multi_turn_size', type=int, default=5)
-    parser.add_argument('--verbose', dest='verbose', action='store_true')
-    parser.add_argument('--no-verbose', dest='verbose', action='store_false')
-    return parser.parse_args()
-
 def parse_msg(request):
     data = request.data.decode()
     xml = ET.fromstring(data)
