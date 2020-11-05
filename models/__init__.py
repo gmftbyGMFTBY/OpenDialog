@@ -22,3 +22,4 @@ from .lccc_gpt2 import *
 from .uni import *
 from .bert_na import *
 from .seq2seq_trs import *
+from .hash import *

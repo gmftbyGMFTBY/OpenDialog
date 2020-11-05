@@ -9,9 +9,10 @@ class BertEmbedding(nn.Module):
     
     '''squeeze strategy: 1. first; 2. first-m; 3. average'''
     
-    def __init__(self, m=0):
+    def __init__(self, m=0, lang='zh'):
         super(BertEmbedding, self).__init__()
-        self.model = BertModel.from_pretrained('bert-base-chinese')
+        model_name = 'bert-base-chinese' if lang == 'zh' else 'bert-base-uncased'
+        self.model = BertModel.from_pretrained(model_name)
         self.m = m
 
     def forward(self, ids, attn_mask, strategy='first'):
@@ -29,10 +30,10 @@ class BertEmbedding(nn.Module):
     
 class PolyCompEncoder(nn.Module):
     
-    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.1, m=16):
+    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.1, m=16, lang='zh'):
         super(PolyCompEncoder, self).__init__()
-        self.ctx_encoder = BertEmbedding(m=m)
-        self.can_encoder = BertEmbedding()
+        self.ctx_encoder = BertEmbedding(m=m, lang=lang)
+        self.can_encoder = BertEmbedding(lang=lang)
         
         encoder_layer = nn.TransformerEncoderLayer(
             768, 
@@ -165,10 +166,10 @@ class PolyCompEncoder(nn.Module):
     
 class PolyEncoder(nn.Module):
     
-    def __init__(self, m=16):
+    def __init__(self, m=16, lang='zh'):
         super(PolyEncoder, self).__init__()
-        self.ctx_encoder = BertEmbedding(m=m)
-        self.can_encoder = BertEmbedding()
+        self.ctx_encoder = BertEmbedding(m=m, lang=lang)
+        self.can_encoder = BertEmbedding(lang=lang)
         
     def _encode(self, cid, rid, cid_mask, rid_mask):
         cid_rep = self.ctx_encoder(cid, cid_mask, strategy='first-m')
@@ -223,10 +224,10 @@ class RUBERTBiEncoder(nn.Module):
     
     '''Re-used Bert bi-encoder model'''
     
-    def __init__(self, max_turn_length=10, m=16):
+    def __init__(self, max_turn_length=10, m=16, lang='zh'):
         super(RUBERTBiEncoder, self).__init__()
-        self.ctx_encoder = BertEmbedding(m=m)
-        self.can_encoder = BertEmbedding()
+        self.ctx_encoder = BertEmbedding(m=m, lang=lang)
+        self.can_encoder = BertEmbedding(lang=lang)
         self.max_chunk = 64
         
     def _encode(self, ids, ids_mask, ctx=True):
@@ -297,122 +298,16 @@ class RUBERTBiEncoder(nn.Module):
         loss = (-loss.sum(dim=1)).mean()
         return loss, acc
     
-class BERTBiHashEncoder(nn.Module):
-    
-    '''During training, the other elements in the batch are seen as the negative samples, which will lead to the fast training speed. More details can be found in paper: https://arxiv.org/pdf/1905.01969v2.pdf
-    reference: https://github.com/chijames/Poly-Encoder/blob/master/encoder.py
-    '''
-    
-    def __init__(self, hidden_size, hash_code_size, dropout=0.3, loss_weight=0.5):
-        super(BERTBiHashEncoder, self).__init__()
-        self.ctx_encoder = BertEmbedding()
-        self.can_encoder = BertEmbedding()
-        self.hash_code_size = hash_code_size
-        self.loss_weight = loss_weight
-        
-        self.ctx_hash_encoder = nn.Sequential(
-            nn.Linear(768, hidden_size),
-            nn.LeakyReLU(),
-            nn.Dropout(p=dropout),
-            nn.Linear(hidden_size, hash_code_size),
-        )
-        
-        self.ctx_hash_decoder = nn.Sequential(
-            nn.Linear(hash_code_size, hidden_size),
-            nn.LeakyReLU(),
-            nn.Dropout(p=dropout),
-            nn.Linear(hidden_size, 768)
-        )
-        
-        self.can_hash_encoder = nn.Sequential(
-            nn.Linear(768, hidden_size),
-            nn.LeakyReLU(),
-            nn.Dropout(p=dropout),
-            nn.Linear(hidden_size, hash_code_size),
-        )
-        
-        self.can_hash_decoder = nn.Sequential(
-            nn.Linear(hash_code_size, hidden_size),
-            nn.LeakyReLU(),
-            nn.Dropout(p=dropout),
-            nn.Linear(hidden_size, 768)
-        )
-        
-    def _encode(self, cid, rid, cid_mask, rid_mask):
-        cid_rep = self.ctx_encoder(cid, cid_mask)
-        rid_rep = self.can_encoder(rid, rid_mask)
-        return cid_rep, rid_rep
-    
-    @torch.no_grad()
-    def get_query_hash_code(self, cid):
-        '''cid: [S]'''
-        cid_rep = self.ctx_encoder(cid.unsqueeze(0), None).squeeze(0)    # [768]
-        hash_code = torch.sign(self.ctx_hash_encoder(cid_rep)).tolist()    # [Hash]
-        return hash_code
-    
-    @torch.no_grad()
-    def get_res_hash_code(self, rid, rid_mask):
-        '''rid: [B, S]'''
-        rid_rep = self.can_encoder(rid, rid_mask)    # [B, 768]
-        hash_code = torch.sign(self.can_hash_encoder(rid_rep)).tolist()    # [B, Hash]
-        return hash_code
-    
-    @torch.no_grad()
-    def predict(self, cid, rid, rid_mask):
-        batch_size = rid.shape[0]
-        cid_rep, rid_rep = self._encode(cid.unsqueeze(0), rid, None, rid_mask)
-        cid_rep = cid_rep.squeeze(0)    # [768]
-        # cid_rep/rid_rep: [768], [B, 768]
-        dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B]
-        return dot_product
-        
-    def forward(self, cid, rid, cid_mask, rid_mask):
-        batch_size = cid.shape[0]
-        assert batch_size > 1, f'[!] batch size must bigger than 1, cause other elements in the batch will be seen as the negative samples'
-        cid_rep, rid_rep = self._encode(cid, rid, cid_mask, rid_mask)
-        
-        # Hash function
-        ctx_hash_code = self.ctx_hash_encoder(cid_rep)    # [B, Hash]
-        can_hash_code = self.can_hash_encoder(rid_rep)    # [B, Hash]
-        cid_rep_recons = self.ctx_hash_decoder(ctx_hash_code)    # [B, 768]
-        rid_rep_recons = self.can_hash_decoder(can_hash_code)    # [B, 768]
-        
-        # ===== calculate the biloss and acc ===== #
-        # cid_rep/rid_rep: [B, 768]
-        dot_product = torch.matmul(cid_rep, rid_rep.t())  # [B, B]
-        # use half for supporting the apex
-        mask = to_cuda(torch.eye(batch_size)).half()    # [B, B]
-        # calculate accuracy
-        acc_num = (F.softmax(dot_product, dim=-1).max(dim=-1)[1] == torch.LongTensor(torch.arange(batch_size)).cuda()).sum().item()
-        acc = acc_num / batch_size
-        # calculate the loss
-        biloss = F.log_softmax(dot_product, dim=-1) * mask
-        biloss = (-biloss.sum(dim=1)).mean()
-        
-        # ===== calculate preserved loss ===== #
-        preserved_loss = torch.norm(cid_rep_recons - cid_rep, p=2, dim=1).sum() + torch.norm(rid_rep_recons - rid_rep, p=2, dim=1).sum()
-        
-        # ===== calculate quantization loss ===== #
-        ctx_hash_code_h, can_hash_code_h = torch.sign(ctx_hash_code), torch.sign(can_hash_code)
-        quantization_loss = torch.norm(ctx_hash_code - ctx_hash_code_h, p=2, dim=1).sum() + torch.norm(can_hash_code - can_hash_code_h, p=2, dim=1).sum()
-        
-        # ===== calculate hash loss (hamming distance) ===== #
-        matrix = torch.matmul(ctx_hash_code, can_hash_code.t())    # [B, B]
-        hash_loss = (matrix - self.hash_code_size * mask).mean()
-        
-        loss = biloss + self.loss_weight * (preserved_loss + quantization_loss + hash_loss)
-        return loss, acc
-    
 class BERTBiEncoder(nn.Module):
     
     '''During training, the other elements in the batch are seen as the negative samples, which will lead to the fast training speed. More details can be found in paper: https://arxiv.org/pdf/1905.01969v2.pdf
     reference: https://github.com/chijames/Poly-Encoder/blob/master/encoder.py
     '''
     
-    def __init__(self):
+    def __init__(self, lang='zh'):
         super(BERTBiEncoder, self).__init__()
-        self.ctx_encoder = BertEmbedding()
-        self.can_encoder = BertEmbedding()
+        self.ctx_encoder = BertEmbedding(lang=lang)
+        self.can_encoder = BertEmbedding(lang=lang)
         
     def _encode(self, cid, rid, cid_mask, rid_mask):
         cid_rep = self.ctx_encoder(cid, cid_mask)
@@ -452,10 +347,10 @@ class BERTBiCompEncoder(nn.Module):
     Set the different learning ratio
     '''
     
-    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.1):
+    def __init__(self, nhead, dim_feedforward, num_encoder_layers, dropout=0.1, lang='zh'):
         super(BERTBiCompEncoder, self).__init__()
-        self.ctx_encoder = BertEmbedding()
-        self.can_encoder = BertEmbedding()
+        self.ctx_encoder = BertEmbedding(lang=lang)
+        self.can_encoder = BertEmbedding(lang=lang)
         
         encoder_layer = nn.TransformerEncoderLayer(
             768, 
@@ -580,22 +475,22 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
     4. polyencodercomp: polyencoder with the comparsion module
     '''
     
-    def __init__(self, multi_gpu, total_step, run_mode='train', local_rank=0, kb=True, model='bertirbi'):
+    def __init__(self, multi_gpu, total_step, run_mode='train', local_rank=0, kb=True, model='bertirbi', lang='zh'):
         super(BERTBiEncoderAgent, self).__init__(kb=kb)
         try:
             self.gpu_ids = list(range(len(multi_gpu.split(',')))) 
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         self.args = {
-            'lr': 5e-5,
-            'lr_': 5e-4,
+            'lr': 2e-5,
+            'lr_': 1e-4,
             'grad_clip': 1.0,
             'multi_gpu': self.gpu_ids,
             'talk_samples': 256,
-            'vocab_file': 'bert-base-chinese',
+            'vocab_file': 'bert-base-chinese' if lang == 'zh' else 'bert-base-uncased',
             'pad': 0,
             'samples': 10,
-            'model': 'bert-base-chinese',
+            'model': 'bert-base-chinese' if lang == 'zh' else 'bert-base-uncased',
             'amp_level': 'O2',
             'local_rank': local_rank,
             'warmup_steps': 8000,
@@ -607,13 +502,15 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'dropout': 0.1,
             'max_len': 256,
             'poly_m': 16,
+            'lang': lang,
         }
         self.vocab = BertTokenizer.from_pretrained(self.args['vocab_file'])
         if model == 'bertirbi':
-            self.model = BERTBiEncoder()
+            self.model = BERTBiEncoder(lang=self.args['lang'],)
         elif model == 'polyencoder':
             self.model = PolyEncoder( 
                 m=self.args['poly_m'],
+                lang=self.args['lang'],
             )
         elif model == 'polyencodercomp':
             self.model = PolyCompEncoder(
@@ -622,6 +519,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                 self.args['num_encoder_layers'], 
                 dropout=self.args['dropout'],
                 m=self.args['poly_m'],
+                lang=self.args['lang'],
             )
         elif model == 'bertirbicomp':
             self.model = BERTBiCompEncoder(
@@ -629,6 +527,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                 self.args['dim_feedforward'], 
                 self.args['num_encoder_layers'], 
                 dropout=self.args['dropout'],
+                lang=self.args['lang'],
             )
         else:
             raise Exception(f'[!] cannot find the model {model}')
@@ -745,6 +644,16 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
         item = torch.argmax(output).item()
         msg = utterances[item]
         return msg
+    
+    @torch.no_grad()
+    def get_embedding(self, ids, ids_mask, context=True):
+        assert self.args['retrieval_model'] == 'bertirbi', f'[!] must be the bertirbi retrieval model'
+        if context:
+            embd = self.model.ctx_encoder(cid, cid_mask)
+        else:
+            embd = self.model.can_encoder(rid, rid_mask)
+        # embd: [B, 768]
+        return embd
     
 class RUBERTBiEncoderAgent(RetrievalBaseAgent):
     

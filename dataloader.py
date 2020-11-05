@@ -829,10 +829,13 @@ class RetrievalDataset(Dataset):
     
     '''Only for Douban300w and E-Commerce datasets; test batch size must be 1'''
     
-    def __init__(self, path, mode='train', max_len=300):
+    def __init__(self, path, mode='train', max_len=300, lang='zh'):
         self.mode = mode
         self.max_len = max_len
-        self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        if lang == 'zh':
+            self.vocab = BertTokenizer.from_pretrained('bert-base-chinese')
+        else:
+            self.vocab = BertTokenizer.from_pretrained('bert-base-uncased')
         self.pad = self.vocab.convert_tokens_to_ids('[PAD]')
         self.pp_path = f'{os.path.splitext(path)[0]}_irbi.pt'
         if os.path.exists(self.pp_path):

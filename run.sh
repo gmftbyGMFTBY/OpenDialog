@@ -10,7 +10,7 @@ model=$3
 cuda=$4 
 
 if [ $mode = 'init' ]; then
-    models=(polyencodercomp rubertirbi polyencoder bertirbicomp topicprediction seq2seq transformer bert_na bertirbi uni lccc lcccir bertmcf bertmc pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 gpt2v2 gpt2v2rl bertretrieval_multiview bertretrieval_cl bertretrieval bertretrieval_dis bertlogic gpt2gan gpt2lm)
+    models=(hash polyencodercomp rubertirbi polyencoder bertirbicomp topicprediction seq2seq transformer bert_na bertirbi uni lccc lcccir bertmcf bertmc pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 gpt2v2 gpt2v2rl bertretrieval_multiview bertretrieval_cl bertretrieval bertretrieval_dis bertlogic gpt2gan gpt2lm)
     datasets=(ecommerce qingyun LCCC STC douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
     mkdir bak ckpt rest
     for m in ${models[@]}
@@ -61,7 +61,7 @@ elif [ $mode = 'train' ]; then
         --mode train \
         --batch_size 32 \
         --n_vocab 80000 \
-        --epoch 10 \
+        --epoch 5 \
         --seed 50 \
         --src_len_size 256 \
         --tgt_len_size 50 \
