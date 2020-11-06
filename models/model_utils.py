@@ -227,6 +227,39 @@ class KBKWParser(KWParser):
             if len(kw) > self.topk:
                 break
         return list(kw)
+    
+class ANNSearcher():
+    
+    '''ANN Searcher rather than Term or Span search by Elasticsearch'''
+    
+    def __init__(self, dim, distance, tree):
+        self.db = AnnoyIndex(dim, distance)
+        self.tree, self.origin_data = tree, {}
+        
+    def save(self, index_path, data_path):
+        self.db.build(self.tree)
+        self.db.save(index_path)
+        with open(data_path, 'wb') as f:
+            pickle.dump(self.origin_data, f)
+        print(f'[!] write index into {index_path}; write data into {data_path}')
+        
+    def load(self, index_path, data_path):
+        self.db.load(path)
+        with open(data_path, 'rb') as f:
+            self.origin_data = pickle.load(f)
+        print(f'[!] load index from {index_path}; load data from {data_path}')
+        
+    def init(self, dataset):
+        '''dataset: [(utterance, vector_represent)]'''
+        for idx, (data, vector) in tqdm(enumerate(dataset)):
+            self.origin_data[idx] = data
+            self.db.add_item(idx, vector)
+        print(f'[!] init the ANN database over ...')
+        
+    def search(self, vector, samples=10):
+        rest = self.db.get_nns_by_vector(vector, samples)
+        rest = [self.origin_data[i] for i in rest]
+        return rest
 
 class ESUtils:
     

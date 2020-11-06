@@ -843,11 +843,11 @@ class RetrievalDataset(Dataset):
             print(f'[!] load preprocessed file from {self.pp_path}')
             return None
         if mode == 'train':
-            data = read_retrieval_data_train(path)
+            data = read_retrieval_data_train(path, lang=lang)
         else:
             name = os.path.split(path)[-1]
             samples = 10 if name == 'test.txt' else int(name[5:-4])
-            data = read_retrieval_data_test(path, samples=samples)
+            data = read_retrieval_data_test(path, samples=samples, lang=lang)
         self.data = []
         if mode in ['train', 'dev']:
             contexts = [i[0] for i in data]
@@ -2406,7 +2406,7 @@ if __name__ == "__main__":
     # train_data = BERTIRBIDataset('data/zh50w/train.txt', mode='train')
     # train_iter = DataLoader(train_data, collate_gn=train_data.collate, batch_size=8, shuffle=True)
     # ========== RURetrievalDataset ========== #
-    train_data = RURetrievalDataset('data/ecommerce/train.txt', mode='train')
+    train_data = RetrievalDataset('data/ubuntu/train.txt', mode='train', lang='en')
     train_iter = DataLoader(train_data, collate_fn=train_data.collate, batch_size=4)
     train_data.save_pickle()
     # ========= ITERATE ========= # 

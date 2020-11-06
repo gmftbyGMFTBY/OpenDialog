@@ -11,7 +11,7 @@ cuda=$4
 
 if [ $mode = 'init' ]; then
     models=(hash polyencodercomp rubertirbi polyencoder bertirbicomp topicprediction seq2seq transformer bert_na bertirbi uni lccc lcccir bertmcf bertmc pone pfgpt2 kwgpt2 when2talk gpt2retrieval decouple_gpt2gan gpt2_mmi gpt2 gpt2v2 gpt2v2rl bertretrieval_multiview bertretrieval_cl bertretrieval bertretrieval_dis bertlogic gpt2gan gpt2lm)
-    datasets=(ecommerce qingyun LCCC STC douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl)
+    datasets=(ecommerce qingyun LCCC STC douban300w when2talk empchat dstc7 personachat dailydialog cornell xiaohuangji tencent LM zh50w train_retrieval mutual decouple_rl train_generative train_generative_rl ubuntu)
     mkdir bak ckpt rest
     for m in ${models[@]}
     do
@@ -47,7 +47,7 @@ elif [ $mode = 'train' ]; then
     rm ckpt/$dataset/$model/*
     rm rest/$dataset/$model/events*    # clear the tensorboard cache
 
-    english_datasets=(mutual dstc7 empchat dailydialog personachat cornell)
+    english_datasets=(mutual dstc7 empchat dailydialog personachat cornell ubuntu)
     if [[ ${english_datasets[@]} =~ $dataset ]]; then
         lang='en'
     else
@@ -76,7 +76,7 @@ elif [ $mode = 'test' ]; then
         batch_size=32
     fi
     
-    english_datasets=(mutual dstc7 empchat dailydialog personachat)
+    english_datasets=(mutual dstc7 empchat dailydialog personachat ubuntu)
     if [[ ${english_datasets[@]} =~ $dataset ]]; then
         lang='en'
     else

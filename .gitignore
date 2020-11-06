@@ -114,6 +114,7 @@ venv.bak/
 *.bin
 *.xlsx
 *.tgz
+*.ann
 *.tar.gz
 .ipynb_checkpoints
 tblogs
