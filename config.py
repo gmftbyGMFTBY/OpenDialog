@@ -101,7 +101,7 @@ model_parameters = {
     'gpt2gan': [('multi_gpu',), {'run_mode': 'mode', 'lang': 'lang'}],
     'transformers': [('total_steps', 'multi_gpu'), {'run_mode': 'mode', 'lang': 'lang', 'local_rank': 'local_rank', 'vocab': 'vocab'}],
     'bertirbi': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank', 'model': 'bimodel', 'lang': 'lang'}],
-    'hash': [('multi_gpu',), {'run_mode': 'mode', 'local_rank': 'local_rank'}],
+    'hash': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank', 'lang': 'lang'}],
     'rubertirbi': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank', 'lang': 'lang'}], 
     'polyencoder': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank', 'model': 'bimodel', 'lang': 'lang'}],
     'polyencodercomp': [('multi_gpu', 'total_steps'), {'run_mode': 'mode', 'local_rank': 'local_rank', 'model': 'bimodel', 'lang': 'lang'}],

@@ -247,10 +247,8 @@ class UNIDataset(Dataset):
 
 class GPT2Dataset(Dataset):
     
-    '''
-    Training GPT2 model doesn't need the target sentence, just training the Language Model
-    GPT2 model can leverage the ability for all the pure text information, which is better than Seq2Seq architecture
-    '''
+    '''Training GPT2 model doesn't need the target sentence, just training the Language Model
+    GPT2 model can leverage the ability for all the pure text information, which is better than Seq2Seq architecture'''
 
     def __init__(self, path, mode='train', lang='zh', min_length=20, src_len_size=512, tgt_len_size=128):
         if lang == 'zh':

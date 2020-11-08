@@ -9,9 +9,9 @@ elif [ $mode = 'expand_negative' ]; then
     expand_samples=(40 90 140 190 240 290)
     for num in ${expand_samples[@]}
     do
-        python expand_negative_samples.py --num $num --dataset douban300w
-        python expand_negative_samples.py --num $num --dataset ecommerce
-        # python expand_negative_samples.py --num $num --dataset ubuntu 
+        # python expand_negative_samples.py --num $num --dataset douban300w
+        # python expand_negative_samples.py --num $num --dataset ecommerce
+        python expand_negative_samples.py --num $num --dataset zh50w 
     done
 elif [ $mode = 'init_ann' ]; then
     python ann_searcher.py

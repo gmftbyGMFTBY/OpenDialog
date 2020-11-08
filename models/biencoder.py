@@ -482,8 +482,8 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         self.args = {
-            'lr': 2e-5,
-            'lr_': 1e-4,
+            'lr': 5e-5,
+            'lr_': 5e-4,
             'grad_clip': 1.0,
             'multi_gpu': self.gpu_ids,
             'talk_samples': 256,
@@ -493,7 +493,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             'model': 'bert-base-chinese' if lang == 'zh' else 'bert-base-uncased',
             'amp_level': 'O2',
             'local_rank': local_rank,
-            'warmup_steps': 8000,
+            'warmup_steps': int(0.1 * total_step),
             'total_step': total_step,
             'retrieval_model': model,
             'num_encoder_layers': 2,
@@ -579,6 +579,15 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
                 find_unused_parameters=True,
             )
         self.show_parameters(self.args)
+        
+    @torch.no_grad()
+    def predict_score(self, msg, rids):
+        '''msg: [S]; rids: [B, S]'''
+        cid = self.vocab.encode(msg)    # length cut
+        rids = []
+        dot_product = self.model.predict(cid, rids, rids_mask).cpu()    # [B]
+        idx = torch.argmax(dot_product).item()
+        return idx
         
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
         self.model.train()

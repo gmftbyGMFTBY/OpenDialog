@@ -60,7 +60,7 @@ def read_text(path):
 def write_file(dataset, path):
     with open(path, 'w') as f:
         responses = [i[-1] for i in dataset]
-        counter = 0
+        counter, false_counter = 0, 0
         for idx in tqdm(range(0, len(dataset), args['bsz'])):
             item = dataset[idx:idx+args['bsz']]
             msgs = [' [SEP] '.join(i[:-1]) for i in item]
@@ -79,6 +79,7 @@ def write_file(dataset, path):
                     r_ = r_['hits']['hits']
                     neg = list(set([i['_source']['utterance'] for i in r_]) - set([r]))[-args['num_neg']:]
                     if len(neg) < args['num_neg']:
+                        false_counter += 1
                         continue
                     m = m.replace(' [SEP] ', '\t')
                     positive = f'1\t{m}\t{r}'
@@ -88,14 +89,14 @@ def write_file(dataset, path):
             for dialog in write_data:
                 for string in dialog:
                     f.write(f'{string}\n')
-        print(f'[!] write {counter} samples')
+        print(f'[!] write {counter} samples; false counter: {false_counter}')
 
 if __name__ == "__main__":
     args = parser_args()
     args = vars(args)
     print(args)
     
-    args['num_neg'] = 1 if args['mode'] == 'train' else 10
+    args['num_neg'] = 1 if args['mode'] == 'train' else 9 
     chatter = ESUtils('retrieval_database')
     
     dataset = read_text(f'{args["mode"]}.txt')
