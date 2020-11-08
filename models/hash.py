@@ -43,6 +43,7 @@ class HashBERTBiEncoderModel(nn.Module):
             nn.Dropout(p=dropout),
             nn.Linear(hidden_size, 768)
         )
+        self.mseloss = nn.MSELoss()
         
     def _encode(self, cid, rid, cid_mask, rid_mask):
         cid_rep = self.ctx_encoder(cid, cid_mask)
@@ -82,9 +83,14 @@ class HashBERTBiEncoderModel(nn.Module):
         
         # ===== calculate hash loss (hamming distance) ===== #
         matrix = torch.matmul(ctx_hash_code, can_hash_code.t())    # [B, B]
+        mask = to_cuda(torch.eye(batch_size)).half()
+        size_matrix = torch.ones_like(mask) * self.hash_code_size
+        zero_matrix = torch.zeros_like(mask)
+        mask = torch.where(mask == 0, size_mask, zero_mask)
         hamming_distance = 0.5 * (self.hash_code_size - matrix)    # hamming distance: ||b_i, b_j||_{H} = 0.5 * (K - b_i^Tb_j); [B, B]
-        hash_loss = hamming_diatance.mean()
-        acc_num = (torch.softmax(hamming_diatance, dim=-1).min(dim=-1) == torch.LongTensot(torch.arange(batch_size)).cuda()).sum().item()
+        # use MSELoss, regulazation
+        hash_loss = self.mseloss(mask, hamming_diatance)
+        acc_num = (torch.softmax(hamming_distance, dim=-1).min(dim=-1)[1] == torch.LongTensor(torch.arange(batch_size)).cuda()).sum().item()
         acc = acc_num / batch_size
         
         loss = preserved_loss + quantization_loss + hash_loss
