@@ -43,7 +43,6 @@ class HashBERTBiEncoderModel(nn.Module):
             nn.Dropout(p=dropout),
             nn.Linear(hidden_size, 768)
         )
-        self.mseloss = nn.MSELoss()
         
     def _encode(self, cid, rid, cid_mask, rid_mask):
         cid_rep = self.ctx_encoder(cid, cid_mask)
@@ -84,12 +83,12 @@ class HashBERTBiEncoderModel(nn.Module):
         # ===== calculate hash loss (hamming distance) ===== #
         matrix = torch.matmul(ctx_hash_code, can_hash_code.t())    # [B, B]
         mask = to_cuda(torch.eye(batch_size)).half()
-        size_matrix = torch.ones_like(mask) * self.hash_code_size
+        one_matrix = torch.ones_like(mask)
         zero_matrix = torch.zeros_like(mask)
-        mask = torch.where(mask == 0, size_mask, zero_mask)
+        mask = torch.where(mask == 0, one_matrix, zero_matrix)
         hamming_distance = 0.5 * (self.hash_code_size - matrix)    # hamming distance: ||b_i, b_j||_{H} = 0.5 * (K - b_i^Tb_j); [B, B]
         # use MSELoss, regulazation
-        hash_loss = self.mseloss(mask, hamming_diatance)
+        hash_loss = torch.norm(matrix - self.hash_code_size * mask, p=2, dim=1).mean()
         acc_num = (torch.softmax(hamming_distance, dim=-1).min(dim=-1)[1] == torch.LongTensor(torch.arange(batch_size)).cuda()).sum().item()
         acc = acc_num / batch_size
         
@@ -226,17 +225,17 @@ class HashModelAgent(RetrievalBaseAgent):
             batch_size = len(rids)
             if batch_size != self.args['samples']:
                 continue
-            hamming_diatance = self.model.predict(cid, rids, rids_mask).cpu()    # [B]
-            r1 += (torch.topk(hamming_diatance, 1, dim=-1)[1] == 0).sum().item()
-            r2 += (torch.topk(hamming_diatance, 2, dim=-1)[1] == 0).sum().item()
-            r5 += (torch.topk(hamming_diatance, 5, dim=-1)[1] == 0).sum().item()
-            r10 += (torch.topk(hamming_diatance, 10, dim=-1)[1] == 0).sum().item()
-            preds = torch.argsort(hamming_diatance, dim=-1).tolist()    # [B, B]
+            hamming_distance = self.model.predict(cid, rids, rids_mask).cpu()    # [B]
+            r1 += (torch.topk(hamming_distance, 1, dim=-1)[1] == 0).sum().item()
+            r2 += (torch.topk(hamming_distance, 2, dim=-1)[1] == 0).sum().item()
+            r5 += (torch.topk(hamming_distance, 5, dim=-1)[1] == 0).sum().item()
+            r10 += (torch.topk(hamming_distance, 10, dim=-1)[1] == 0).sum().item()
+            preds = torch.argsort(hamming_distance, dim=-1).tolist()    # [B, B]
             # mrr
-            hamming_diatance = hamming_diatance.numpy()
-            y_true = np.zeros(len(hamming_diatance))
+            hamming_distance = hamming_distance.numpy()
+            y_true = np.zeros(len(hamming_distance))
             y_true[0] = 1
-            mrr.append(label_ranking_average_precision_score([y_true], [hamming_diatance]))
+            mrr.append(label_ranking_average_precision_score([y_true], [hamming_distance]))
             counter += 1
             
         r1, r2, r5, r10, mrr = round(r1/counter, 4), round(r2/counter, 4), round(r5/counter, 4), round(r10/counter, 4), round(np.mean(mrr), 4)
