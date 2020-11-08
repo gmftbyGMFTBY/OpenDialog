@@ -15,7 +15,6 @@ class HashBERTBiEncoderModel(nn.Module):
         self.can_encoder = BertEmbedding(lang=lang)
         
         self.hash_code_size = hash_code_size
-        self.loss_weight = loss_weight
         
         self.ctx_hash_encoder = nn.Sequential(
             nn.Linear(768, hidden_size),
@@ -75,20 +74,23 @@ class HashBERTBiEncoderModel(nn.Module):
         rid_rep_recons = self.can_hash_decoder(can_hash_code)    # [B, 768]
         
         # ===== calculate preserved loss ===== #
-        preserved_loss = torch.norm(cid_rep_recons - cid_rep, p=2, dim=1).sum() + torch.norm(rid_rep_recons - rid_rep, p=2, dim=1).sum()
+        preserved_loss = torch.norm(cid_rep_recons - cid_rep, p=2, dim=1).mean() + torch.norm(rid_rep_recons - rid_rep, p=2, dim=1).mean()
         
         # ===== calculate quantization loss ===== #
         ctx_hash_code_h, can_hash_code_h = torch.sign(ctx_hash_code), torch.sign(can_hash_code)
-        quantization_loss = torch.norm(ctx_hash_code - ctx_hash_code_h, p=2, dim=1).sum() + torch.norm(can_hash_code - can_hash_code_h, p=2, dim=1).sum()
+        quantization_loss = torch.norm(ctx_hash_code - ctx_hash_code_h, p=2, dim=1).mean() + torch.norm(can_hash_code - can_hash_code_h, p=2, dim=1).mean()
         
         # ===== calculate hash loss (hamming distance) ===== #
         matrix = torch.matmul(ctx_hash_code, can_hash_code.t())    # [B, B]
-        hash_loss = 0.5 * (self.hash_code_size - matrix).mean()    # hamming distance: ||b_i, b_j||_{H} = 0.5 * (K - b_i^Tb_j)
+        hamming_distance = 0.5 * (self.hash_code_size - matrix)    # hamming distance: ||b_i, b_j||_{H} = 0.5 * (K - b_i^Tb_j); [B, B]
+        hash_loss = hamming_diatance.mean()
+        acc_num = (torch.softmax(hamming_diatance, dim=-1).min(dim=-1) == torch.LongTensot(torch.arange(batch_size)).cuda()).sum().item()
+        acc = acc_num / batch_size
         
         loss = preserved_loss + quantization_loss + hash_loss
-        return loss, (preserved_loss, quantization_loss, hash_loss)
+        return loss, acc, (preserved_loss, quantization_loss, hash_loss)
 
-class HashModelAgent(BaseAgent):
+class HashModelAgent(RetrievalBaseAgent):
     
     def __init__(self, multi_gpu, total_step, run_mode='train', local_rank=0, kb=True, lang='zh'):
         super(HashModelAgent, self).__init__(kb=kb)
@@ -148,7 +150,7 @@ class HashModelAgent(BaseAgent):
                 ], 
                 lr=self.args['lr'],
             )
-            print(f'[!] set the different learning ratios for comparsion module')
+            print(f'[!] set the different learning ratios for hashing module')
             self.model, self.optimizer = amp.initialize(
                 self.model, 
                 self.optimizer,
@@ -167,13 +169,13 @@ class HashModelAgent(BaseAgent):
         
     def train_model(self, train_iter, mode='train', recoder=None, idx_=0):
         self.model.train()
-        total_loss, total_p_loss, total_q_loss, total_h_loss, batch_num = 0, 0, 0, 0, 0
+        total_acc, total_loss, total_p_loss, total_q_loss, total_h_loss, batch_num = 0, 0, 0, 0, 0, 0
         pbar = tqdm(train_iter)
         correct, s = 0, 0
         for idx, batch in enumerate(pbar):
             self.optimizer.zero_grad()
             cid, rid, cid_mask, rid_mask = batch
-            loss, (preserved_loss, quantization_loss, hash_loss) = self.model(
+            loss, acc, (preserved_loss, quantization_loss, hash_loss) = self.model(
                 cid, rid, cid_mask, rid_mask
             )
             loss.backward()
@@ -181,6 +183,7 @@ class HashModelAgent(BaseAgent):
             self.optimizer.step()
 
             total_loss += loss.item()
+            total_acc += acc
             total_p_loss += preserved_loss.item()
             total_q_loss += quantization_loss.item()
             total_h_loss += hash_loss.item()
@@ -194,12 +197,16 @@ class HashModelAgent(BaseAgent):
             recoder.add_scalar(f'train-epoch-{idx_}/RunHashLoss', hash_loss.item(), idx)
             recoder.add_scalar(f'train-epoch-{idx_}/Loss', total_loss/batch_num, idx)
             recoder.add_scalar(f'train-epoch-{idx_}/RunLoss', loss.item(), idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/RunAcc', acc, idx)
+            recoder.add_scalar(f'train-epoch-{idx_}/Acc', total_acc/batch_num, idx)
 
-            pbar.set_description(f'[!] loss(preserved|quantization|hash|total): {round(total_p_loss/batch_num, 4)}|{round(total_q_loss/batch_num, 4)}|{round(total_h_loss/batch_num, 4)}|{round(total_loss/batch_num, 4)}')
+            pbar.set_description(f'[!] loss(p|q|hash|t): {round(total_p_loss/batch_num, 4)}|{round(total_q_loss/batch_num, 4)}|{round(total_h_loss/batch_num, 4)}|{round(total_loss/batch_num, 4)}; acc: {round(acc, 4)}|{round(total_acc/batch_num, 3)}')
+        
         recoder.add_scalar(f'train-whole/Loss', total_loss/batch_num, idx_)
         recoder.add_scalar(f'train-whole/PreservedLoss', total_p_loss/batch_num, idx_)
         recoder.add_scalar(f'train-whole/QuantizationLoss', total_q_loss/batch_num, idx_)
         recoder.add_scalar(f'train-whole/HashLoss', total_h_loss/batch_num, idx_)
+        recoder.add_scalar(f'train-whole/Acc', total_acc/batch_num, idx_)
         return round(total_loss / batch_num, 4)
     
     @torch.no_grad()
