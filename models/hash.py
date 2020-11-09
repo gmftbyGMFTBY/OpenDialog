@@ -1,5 +1,5 @@
 from .header import *
-from .biencoder import BertEmbedding
+from .biencoder import BertEmbedding, BERTBiEncoder
 
 '''Deep Hashing for high-efficient ANN search'''
 
@@ -9,12 +9,10 @@ class HashBERTBiEncoderModel(nn.Module):
     1. hashing module is the regularization for the bi-encoder module,
     2. bi-encoding module can bring better performance for the hashing code.'''
     
-    def __init__(self, hidden_size, hash_code_size, dropout=0.3, lang='zh'):
+    def __init__(self, hidden_size, hash_code_size, dropout=0.3, lang='lang'):
         super(HashBERTBiEncoderModel, self).__init__()
-        self.ctx_encoder = BertEmbedding(lang=lang)
-        self.can_encoder = BertEmbedding(lang=lang)
-        
         self.hash_code_size = hash_code_size
+        self.encoder = BERTBiEncoder(lang=lang)
         
         self.ctx_hash_encoder = nn.Sequential(
             nn.Linear(768, hidden_size),
@@ -44,9 +42,15 @@ class HashBERTBiEncoderModel(nn.Module):
             nn.Linear(hidden_size, 768)
         )
         
+    def load_encoder(self, path):
+        state_dict = torch.load(path)
+        self.encoder.load_state_dict(state_dict)
+        print(f'[!] load the bertbiencoder successfully ...')
+        
+    @torch.no_grad()
     def _encode(self, cid, rid, cid_mask, rid_mask):
-        cid_rep = self.ctx_encoder(cid, cid_mask)
-        rid_rep = self.can_encoder(rid, rid_mask)
+        cid_rep = self.encoder.ctx_encoder(cid, cid_mask)
+        rid_rep = self.encoder.can_encoder(rid, rid_mask)
         return cid_rep, rid_rep
     
     @torch.no_grad()
@@ -65,6 +69,7 @@ class HashBERTBiEncoderModel(nn.Module):
         '''do we need the dot production loss? In my opinion, the hash loss is the replaction of the dot production loss. But need the experiment results to show it.'''
         batch_size = cid.shape[0]
         assert batch_size > 1, f'[!] batch size must bigger than 1, cause other elements in the batch will be seen as the negative samples'
+        
         cid_rep, rid_rep = self._encode(cid, rid, cid_mask, rid_mask)
         
         # Hash function
@@ -87,8 +92,7 @@ class HashBERTBiEncoderModel(nn.Module):
         zero_matrix = torch.zeros_like(mask)
         mask = torch.where(mask == 0, one_matrix, zero_matrix)
         hamming_distance = 0.5 * (self.hash_code_size - matrix)    # hamming distance: ||b_i, b_j||_{H} = 0.5 * (K - b_i^Tb_j); [B, B]
-        # use MSELoss, regulazation
-        hash_loss = torch.norm(matrix - self.hash_code_size * mask, p=2, dim=1).mean()
+        hash_loss = torch.norm(matrix - self.hash_code_size * mask, p=2).mean()
         acc_num = (torch.softmax(hamming_distance, dim=-1).min(dim=-1)[1] == torch.LongTensor(torch.arange(batch_size)).cuda()).sum().item()
         acc = acc_num / batch_size
         
@@ -117,6 +121,7 @@ class HashModelAgent(RetrievalBaseAgent):
             'warmup_steps': int(0.1 * total_step),
             'samples': 10,
             'amp_level': 'O2',
+            'path': 'ckpt/zh50w/bertirbi/best.pt',
         }
         
         self.model = HashBERTBiEncoderModel(
@@ -125,6 +130,7 @@ class HashModelAgent(RetrievalBaseAgent):
             dropout=self.args['dropout'],
             lang=self.args['lang'],
         )
+        self.model.load_encoder(self.args['path'])
         if torch.cuda.is_available():
             self.model.cuda()
         if run_mode == 'train':
