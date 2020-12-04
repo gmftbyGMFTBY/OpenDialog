@@ -1365,11 +1365,12 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
         return round(total_loss / batch_num, 4)
         
     @torch.no_grad()
-    def test_model(self, test_iter, mode='test', recoder=None, idx_=0):
+    def test_model(self, test_iter, recoder=None, idx_=0):
         '''there is only one context in the batch, and response are the candidates that are need to reranked; batch size is the self.args['samples']; the groundtruth is the first one. For douban300w and E-Commerce datasets'''
         self.model.eval()
         r1, r2, r5, r10, counter, mrr = 0, 0, 0, 0, 0, []
         pbar = tqdm(test_iter)
+        f = open(recoder, 'w')
         for idx, batch in tqdm(list(enumerate(pbar))):                
             cid, rids, rids_mask = batch
             batch_size = len(rids)
@@ -1388,8 +1389,19 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             mrr.append(label_ranking_average_precision_score([y_true], [dot_product]))
             counter += 1
             
+            # write the response selection results
+            r_index = np.argmax(dot_product)
+            c_text = self.vocab.decode(cid).replace('[PAD]', '')
+            f.write(f'[CTX]: {c_text}\n')
+            r_text = self.vocab.decode(rids[0]).replace('[PAD]', '')
+            f.write(f'[REF]: {r_text}\n')
+            t_text = self.vocab.decode(rids[r_index]).replace('[PAD]', '')
+            f.write(f'[TGT]: {t_text}\n\n')
+        f.close()
+            
         r1, r2, r5, r10, mrr = round(r1/counter, 4), round(r2/counter, 4), round(r5/counter, 4), round(r10/counter, 4), round(np.mean(mrr), 4)
         print(f'r1@10: {r1}; r2@10: {r2}; r5@10: {r5}; r10@10: {r10}; mrr: {mrr}')
+        print(f'[!] results are saved into {recoder}')
     
     @torch.no_grad()
     def talk(self, msgs, topic=None):
