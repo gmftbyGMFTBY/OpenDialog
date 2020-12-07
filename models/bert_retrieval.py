@@ -49,7 +49,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
         self.args = {
-            'lr': 1e-5,
+            'lr': 2e-5,
             'grad_clip': 1.0,
             'samples': 10,
             'multi_gpu': self.gpu_ids,
@@ -119,7 +119,7 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         return round(total_loss / batch_num, 4)
 
     @torch.no_grad()
-    def test_model(self, test_iter, path):
+    def test_model_(self, test_iter, path):
         self.model.eval()
         total_loss, batch_num = 0, 0
         pbar = tqdm(test_iter)
@@ -139,6 +139,32 @@ class BERTRetrievalAgent(RetrievalBaseAgent):
         print(f'[!] test loss: {round(total_loss/batch_num, 4)}')
         p_1, r2_1, r10_1, r10_2, r10_5, MAP, MRR = cal_ir_metric(rest)
         print(f'[TEST] P@1: {p_1}; R2@1: {r2_1}; R10@1: {r10_1}; R10@2: {r10_2}; R10@5: {r10_5}; MAP: {MAP}; MRR: {MRR}')
+        return round(total_loss/batch_num, 4)
+    
+    @torch.no_grad()
+    def test_model(self, test_iter, path):
+        self.model.eval()
+        r1, r2, r5, r10, counter, mrr = 0, 0, 0, 0, 0, []
+        pbar = tqdm(test_iter)
+        for idx, batch in enumerate(pbar):
+            cid, token_type_ids, attn_mask, label = batch
+            output = self.model(cid, token_type_ids, attn_mask)    # [batch, 2]
+            output = F.softmax(output, dim=-1)[:, 1]    # [batch]
+            preds = [i.tolist() for i in torch.split(output, self.args['samples'])]
+            for pred in preds:
+                # pred: [B]
+                pred = np.argsort(pred, axis=0)[::-1]
+                r1 += (torch.topk(pred, 1, dim=-1)[1] == 0).sum().item()
+                r2 += (torch.topk(pred, 2, dim=-1)[1] == 0).sum().item()
+                r5 += (torch.topk(pred, 5, dim=-1)[1] == 0).sum().item()
+                r10 += (torch.topk(pred, 10, dim=-1)[1] == 0).sum().item()
+                pred = pred.numpy()
+                y_true = np.zeros(len(pred))
+                y_true[0] = 1
+                mrr.append(label_ranking_average_precision_score([y_true], [pred]))
+                counter += 1
+        r1, r2, r5, r10, mrr = round(r1/counter, 4), round(r2/counter, 4), round(r5/counter, 4), round(r10/counter, 4), round(np.mean(mrr), 4)
+        print(f'r1@10: {r1}; r2@10: {r2}; r5@10: {r5}; r10@10: {r10}; mrr: {mrr}')
         return round(total_loss/batch_num, 4)
 
     @torch.no_grad()
