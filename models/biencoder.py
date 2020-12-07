@@ -1227,6 +1227,7 @@ class BERTBiEncoderAgent(RetrievalBaseAgent):
             self.gpu_ids = list(range(len(multi_gpu.split(',')))) 
         except:
             raise Exception(f'[!] multi gpu ids are needed, but got: {multi_gpu}')
+        total_step /= len(self.gpu_ids)
         self.args = {
             'lr': 5e-5,
             'lr_': 5e-4,
