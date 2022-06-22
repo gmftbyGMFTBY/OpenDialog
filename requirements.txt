@@ -13,7 +13,7 @@ gensim==3.7.3
 Flask==1.1.1
 nltk==3.4.5
 elasticsearch==7.6.0
-numpy==1.19.1
+numpy==1.22.0
 bert_score==0.3.0
 zhconv==1.4.1
 torchtext==0.4.0
