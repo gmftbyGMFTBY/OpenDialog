@@ -10,7 +10,7 @@ transformers==2.11.0
 ipdb==0.13.3
 requests==2.24.0
 gensim==3.7.3
-Flask==1.1.1
+Flask==2.3.2
 nltk==3.4.5
 elasticsearch==7.6.0
 numpy==1.19.1
