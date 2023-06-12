@@ -6,7 +6,7 @@ bert_serving==0.0.1
 ijson==3.1.1
 rouge==1.0.0
 torch==1.5.1+cu92
-transformers==2.11.0
+transformers==4.30.0
 ipdb==0.13.3
 requests==2.24.0
 gensim==3.7.3
