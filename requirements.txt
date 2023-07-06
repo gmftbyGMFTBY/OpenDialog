@@ -1,7 +1,7 @@
 thulac==0.2.0
 networkx==2.4
 pymongo==3.11.0
-scipy==1.5.2
+scipy==1.10.0
 bert_serving==0.0.1
 ijson==3.1.1
 rouge==1.0.0
